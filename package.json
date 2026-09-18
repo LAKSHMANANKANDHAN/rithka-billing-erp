@@ -1,0 +1,22 @@
+{
+  "name": "rithka-billing-software",
+  "version": "1.0.0",
+  "description": "Billing, Inward Stock, Outward Delivery Challan and Stock Management Software",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "server": "node server/server.js",
+    "client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "test": "node test/end_to_end_test.js"
+  },
+  "keywords": [
+    "billing",
+    "inward-stock",
+    "outward-challan",
+    "erp",
+    "inventory"
+  ],
+  "author": "Shri.Bharathi & Co.",
+  "license": "ISC"
+}

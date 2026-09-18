@@ -1,7 +1,23 @@
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
-const dbPath = path.join(__dirname, 'erp.db');
+
+let dbPath;
+if (process.env.VERCEL) {
+  const targetDb = path.join(os.tmpdir(), 'erp.db');
+  const sourceDb = path.join(__dirname, 'erp.db');
+  try {
+    if (!fs.existsSync(targetDb) && fs.existsSync(sourceDb)) {
+      fs.copyFileSync(sourceDb, targetDb);
+    }
+  } catch (e) {
+    console.warn('Could not copy seed db to tmpdir:', e.message);
+  }
+  dbPath = targetDb;
+} else {
+  dbPath = path.join(__dirname, 'erp.db');
+}
 
 let db;
 let query, getOne, run, execute;
@@ -84,7 +100,12 @@ try {
 
 // Initialize schema and seed data
 async function initDatabase() {
-  const schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
+  let schemaSql;
+  try {
+    schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
+  } catch (e) {
+    schemaSql = require('./schemaSql');
+  }
   await execute(schemaSql);
 
   // Check if company settings exist

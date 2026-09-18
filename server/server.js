@@ -22,6 +22,25 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+// Database auto-initialization middleware (handles serverless cold starts)
+let dbInitPromise = null;
+app.use(async (req, res, next) => {
+  // Allow health check without blocking if needed, but DB init is fast
+  if (!dbInitPromise) {
+    dbInitPromise = initDatabase().catch(err => {
+      console.error('Database initialization error:', err);
+      dbInitPromise = null;
+      throw err;
+    });
+  }
+  try {
+    await dbInitPromise;
+    next();
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Database initialization error: ' + err.message });
+  }
+});
+
 // Serve reference documents and static uploads
 const refPath = path.join(__dirname, '..', 'reference_docs');
 if (fs.existsSync(refPath)) {
@@ -81,4 +100,8 @@ async function startServer() {
   }
 }
 
-startServer();
+if (process.env.VERCEL || process.env.NODE_ENV === 'test' || require.main !== module) {
+  module.exports = app;
+} else {
+  startServer();
+}

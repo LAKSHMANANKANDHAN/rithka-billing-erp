@@ -41,7 +41,7 @@ async function runEndToEndTests() {
   const customer = await getOne('SELECT id, company_name FROM customers WHERE company_name LIKE "Texmo%"');
   assert(customer, 'Texmo customer must exist');
 
-  const inwardNo = 'INW-TEST-001';
+  const inwardNo = `INW-TEST-${Date.now()}`;
   const inwardResult = await run(`
     INSERT INTO inward_entries (
       inward_no, customer_id, po_no, po_date, dc_no, dc_date, vehicle_no, 
@@ -102,7 +102,7 @@ async function runEndToEndTests() {
 
   // 6. Valid Outward Delivery Challan Creation with 9% Tax
   console.log('[TEST 6] Testing Outward Delivery Challan creation with 9% GST...');
-  const challanNo = '0001/26-27';
+  const challanNo = 'DC-TEST-' + Date.now();
   const dispatchQty1 = 40; // 40 STEEL TRAY @ 50 = 2000
   const dispatchQty2 = 20; // 20 PLASTIC TRAY @ 30 = 600
   const subtotal = (dispatchQty1 * 50) + (dispatchQty2 * 30); // 2600
@@ -181,7 +181,7 @@ async function runEndToEndTests() {
 
   // 8. Test Reports consistency
   console.log('[TEST 8] Verifying Reports and Ledger consistency...');
-  const ledgerEntries = await query('SELECT * FROM stock_transactions WHERE customer_id = ?', [customer.id]);
+  const ledgerEntries = await query('SELECT * FROM stock_transactions WHERE inward_no = ?', [inwardNo]);
   assert.strictEqual(ledgerEntries.length, 4, 'Must have 2 inward and 2 outward transaction records');
 
   const totalInwardLogged = ledgerEntries.filter(e => e.transaction_type === 'INWARD').reduce((s, e) => s + e.quantity, 0);

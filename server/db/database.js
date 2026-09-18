@@ -1,50 +1,86 @@
-const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
-
 const dbPath = path.join(__dirname, 'erp.db');
-const db = new sqlite3.Database(dbPath);
 
-// Enable foreign keys
-db.run('PRAGMA foreign_keys = ON');
+let db;
+let query, getOne, run, execute;
 
-// Promisified helper methods
-const query = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.all(sql, params, (err, rows) => {
-      if (err) reject(err);
-      else resolve(rows);
+try {
+  const sqlite3 = require('sqlite3').verbose();
+  const sdb = new sqlite3.Database(dbPath);
+  sdb.run('PRAGMA foreign_keys = ON');
+
+  query = (sql, params = []) => {
+    return new Promise((resolve, reject) => {
+      sdb.all(sql, params, (err, rows) => {
+        if (err) reject(err);
+        else resolve(rows);
+      });
     });
-  });
-};
+  };
 
-const getOne = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.get(sql, params, (err, row) => {
-      if (err) reject(err);
-      else resolve(row);
+  getOne = (sql, params = []) => {
+    return new Promise((resolve, reject) => {
+      sdb.get(sql, params, (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      });
     });
-  });
-};
+  };
 
-const run = (sql, params = []) => {
-  return new Promise((resolve, reject) => {
-    db.run(sql, params, function (err) {
-      if (err) reject(err);
-      else resolve({ lastID: this.lastID, changes: this.changes });
+  run = (sql, params = []) => {
+    return new Promise((resolve, reject) => {
+      sdb.run(sql, params, function (err) {
+        if (err) reject(err);
+        else resolve({ lastID: this.lastID, changes: this.changes });
+      });
     });
-  });
-};
+  };
 
-const execute = (sql) => {
-  return new Promise((resolve, reject) => {
-    db.exec(sql, (err) => {
-      if (err) reject(err);
-      else resolve();
+  execute = (sql) => {
+    return new Promise((resolve, reject) => {
+      sdb.exec(sql, (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
     });
-  });
-};
+  };
+
+  db = sdb;
+} catch (loadErr) {
+  try {
+    const { DatabaseSync } = require('node:sqlite');
+    const nodeDb = new DatabaseSync(dbPath);
+    nodeDb.exec('PRAGMA foreign_keys = ON');
+
+    query = async (sql, params = []) => {
+      const stmt = nodeDb.prepare(sql);
+      return stmt.all(...params);
+    };
+
+    getOne = async (sql, params = []) => {
+      const stmt = nodeDb.prepare(sql);
+      return stmt.get(...params);
+    };
+
+    run = async (sql, params = []) => {
+      const stmt = nodeDb.prepare(sql);
+      const result = stmt.run(...params);
+      return { lastID: Number(result.lastInsertRowid), changes: Number(result.changes) };
+    };
+
+    execute = async (sql) => {
+      nodeDb.exec(sql);
+    };
+
+    db = nodeDb;
+    console.log('Using Node.js built-in node:sqlite engine.');
+  } catch (fallbackErr) {
+    console.error('Both sqlite3 and node:sqlite failed to load.');
+    throw loadErr;
+  }
+}
 
 // Initialize schema and seed data
 async function initDatabase() {

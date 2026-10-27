@@ -85,6 +85,22 @@ app.use(async (req, res, next) => {
   }
 });
 
+// Serve reference documents and static uploads
+const refPath = path.join(__dirname, '..', 'reference_docs');
+if (fs.existsSync(refPath)) {
+  app.use('/reference_docs', express.static(refPath));
+}
+
+// API Routes
+app.use('/api/auth', authRoutes);
+app.use('/api', mastersRoutes);
+app.use('/api/inward', inwardRoutes);
+app.use('/api/outward', outwardRoutes);
+app.use('/api/stock', stockRoutes);
+app.use('/api/reports', reportsRoutes);
+app.use('/api/settings', settingsRoutes);
+app.use('/api/audit', auditRoutes);
+
 // Serve frontend in production
 const clientDistPath = path.join(__dirname, '..', 'client', 'dist');
 if (fs.existsSync(clientDistPath)) {

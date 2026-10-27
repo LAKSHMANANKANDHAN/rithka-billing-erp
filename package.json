@@ -7,7 +7,7 @@
     "start": "node server/server.js",
     "server": "node server/server.js",
     "client": "npm --prefix client run dev",
-    "build": "node -e \"console.log('Static client dist ready')\"",
+    "build": "npm --prefix client run build",
     "build:client": "npm --prefix client run build",
     "test": "node test/end_to_end_test.js",
     "db:test-supabase": "node server/db/test-supabase.js",

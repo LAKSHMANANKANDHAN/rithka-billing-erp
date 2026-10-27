@@ -18,7 +18,7 @@ const supabaseDbUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
 const isSupabase = Boolean(supabaseDbUrl);
 
 let db = null;
-let pool = null;
+let pool = global._pgPool || null;
 let supabaseClient = null;
 let query, getOne, run, execute;
 
@@ -45,7 +45,7 @@ function convertPlaceholders(sql) {
 
 if (isSupabase) {
   // ==========================================
-  // SUPABASE / POSTGRESQL ENGINE
+  // SUPABASE / POSTGRESQL ENGINE (Serverless Ready)
   // ==========================================
   const { Pool, types } = require('pg');
 
@@ -54,10 +54,16 @@ if (isSupabase) {
   // Parse NUMERIC / DECIMAL into float numbers in JavaScript
   types.setTypeParser(1700, (val) => (val === null ? null : parseFloat(val)));
 
-  pool = new Pool({
-    connectionString: supabaseDbUrl,
-    ssl: { rejectUnauthorized: false } // Required by Supabase connection pooler
-  });
+  if (!pool) {
+    pool = new Pool({
+      connectionString: supabaseDbUrl,
+      ssl: { rejectUnauthorized: false }, // Required by Supabase connection pooler
+      max: process.env.VERCEL ? 3 : 10,  // Keep connection count small per serverless instance
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 8000,
+    });
+    global._pgPool = pool;
+  }
 
   query = async (sql, params = []) => {
     const formattedSql = convertPlaceholders(sql);
@@ -96,6 +102,12 @@ if (isSupabase) {
   // ==========================================
   // LOCAL SQLITE FALLBACK ENGINE
   // ==========================================
+  if (process.env.VERCEL) {
+    // If running in Vercel without SUPABASE_DB_URL, throw clear actionable error
+    const msg = 'CRITICAL: SUPABASE_DB_URL is not configured in Vercel Environment Variables. Please go to Vercel Dashboard -> Settings -> Environment Variables and add SUPABASE_DB_URL.';
+    console.error(msg);
+  }
+
   let dbPath;
   if (process.env.VERCEL) {
     const targetDb = path.join(os.tmpdir(), 'erp.db');
@@ -183,6 +195,9 @@ if (isSupabase) {
       db = nodeDb;
       console.log('Using Node.js built-in node:sqlite engine.');
     } catch (fallbackErr) {
+      if (process.env.VERCEL) {
+        throw new Error('Database error on Vercel: SUPABASE_DB_URL is missing in Vercel Environment Variables. Please add SUPABASE_DB_URL in Vercel Dashboard -> Settings -> Environment Variables.');
+      }
       console.error('Both sqlite3 and node:sqlite failed to load.');
       throw loadErr;
     }
@@ -191,22 +206,37 @@ if (isSupabase) {
 
 // Initialize schema and seed data
 async function initDatabase() {
-  let schemaSql;
+  // If running with Supabase and company_settings table already exists, skip full DDL execution for fast cold start
   if (isSupabase) {
     try {
-      schemaSql = fs.readFileSync(path.join(__dirname, 'schema.postgres.sql'), 'utf-8');
-    } catch (e) {
-      schemaSql = require('./schemaPostgresSql');
-    }
-  } else {
-    try {
-      schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
-    } catch (e) {
-      schemaSql = require('./schemaSql');
+      const existingSettings = await getOne('SELECT id FROM company_settings LIMIT 1');
+      if (existingSettings) {
+        // Schema is already created and seeded
+        return;
+      }
+    } catch (checkErr) {
+      // Table doesn't exist yet, proceed with schema creation below
     }
   }
 
-  await execute(schemaSql);
+  let schemaSql;
+  if (isSupabase) {
+    try {
+      schemaSql = require('./schemaPostgresSql');
+    } catch (e) {
+      schemaSql = fs.readFileSync(path.join(__dirname, 'schema.postgres.sql'), 'utf-8');
+    }
+  } else {
+    try {
+      schemaSql = require('./schemaSql');
+    } catch (e) {
+      schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
+    }
+  }
+
+  if (schemaSql && schemaSql.trim()) {
+    await execute(schemaSql);
+  }
 
   // Check if company settings exist
   const existingSettings = await getOne('SELECT id FROM company_settings LIMIT 1');
@@ -305,8 +335,6 @@ async function initDatabase() {
       ]);
     }
   }
-
-  // Note: Customer master starts empty and fresh for the user to add real clients.
 
   if (isSupabase) {
     console.log('[Supabase] Database connected, schema checked and ready.');

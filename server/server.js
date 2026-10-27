@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
-const { initDatabase } = require('./db/database');
+const { initDatabase, isSupabase, query, getOne } = require('./db/database');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -22,44 +22,67 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Database auto-initialization middleware (handles serverless cold starts)
-let dbInitPromise = null;
-app.use(async (req, res, next) => {
-  // Allow health check without blocking if needed, but DB init is fast
-  if (!dbInitPromise) {
-    dbInitPromise = initDatabase().catch(err => {
-      console.error('Database initialization error:', err);
-      dbInitPromise = null;
-      throw err;
+// Health check endpoint (always accessible without blocking)
+app.get('/api/health', async (req, res) => {
+  try {
+    let dbConnected = false;
+    let dbError = null;
+    try {
+      const ping = await getOne('SELECT 1 as connected');
+      dbConnected = Boolean(ping?.connected);
+    } catch (dbErr) {
+      dbConnected = false;
+      dbError = dbErr.message;
+    }
+
+    res.json({
+      status: dbConnected ? 'ok' : 'degraded',
+      environment: process.env.VERCEL ? 'vercel-serverless' : 'local',
+      databaseType: isSupabase ? 'supabase-postgresql' : 'sqlite',
+      databaseConnected: dbConnected,
+      supabaseConfigured: Boolean(process.env.SUPABASE_DB_URL || process.env.DATABASE_URL),
+      databaseError: dbError,
+      hint: !isSupabase && process.env.VERCEL
+        ? 'Please set SUPABASE_DB_URL in Vercel Project Settings -> Environment Variables.'
+        : undefined,
+      time: new Date().toISOString()
     });
+  } catch (err) {
+    res.status(500).json({ status: 'error', message: err.message });
   }
+});
+
+// Database auto-initialization middleware (handles serverless cold starts)
+let dbInitPromise = global._dbInitPromise || null;
+app.use(async (req, res, next) => {
+  if (req.path === '/api/health') return next();
+
+  if (!dbInitPromise) {
+    dbInitPromise = initDatabase()
+      .then(() => {
+        global._dbInitPromise = dbInitPromise;
+      })
+      .catch(err => {
+        console.error('Database initialization error:', err);
+        dbInitPromise = null;
+        global._dbInitPromise = null;
+        throw err;
+      });
+    global._dbInitPromise = dbInitPromise;
+  }
+
   try {
     await dbInitPromise;
     next();
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Database initialization error: ' + err.message });
+    res.status(500).json({
+      success: false,
+      message: 'Database initialization error: ' + err.message,
+      hint: !isSupabase && process.env.VERCEL
+        ? 'Please add SUPABASE_DB_URL to your Vercel Project Settings -> Environment Variables.'
+        : undefined
+    });
   }
-});
-
-// Serve reference documents and static uploads
-const refPath = path.join(__dirname, '..', 'reference_docs');
-if (fs.existsSync(refPath)) {
-  app.use('/reference_docs', express.static(refPath));
-}
-
-// API Routes
-app.use('/api/auth', authRoutes);
-app.use('/api', mastersRoutes);
-app.use('/api/inward', inwardRoutes);
-app.use('/api/outward', outwardRoutes);
-app.use('/api/stock', stockRoutes);
-app.use('/api/reports', reportsRoutes);
-app.use('/api/settings', settingsRoutes);
-app.use('/api/audit', auditRoutes);
-
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() });
 });
 
 // Serve frontend in production

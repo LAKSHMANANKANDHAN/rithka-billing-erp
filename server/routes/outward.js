@@ -324,7 +324,7 @@ router.delete('/:id', authenticate, requireOwner, async (req, res) => {
     }
 
     // Delete stock transactions
-    await run('DELETE FROM stock_transactions WHERE reference_type = "OUTWARD" AND reference_id = ?', [id]);
+    await run("DELETE FROM stock_transactions WHERE reference_type = 'OUTWARD' AND reference_id = ?", [id]);
     // Delete items
     await run('DELETE FROM outward_items WHERE challan_id = ?', [id]);
     // Delete challan

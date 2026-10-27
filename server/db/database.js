@@ -3,109 +3,209 @@ const path = require('path');
 const fs = require('fs');
 const bcrypt = require('bcryptjs');
 
-let dbPath;
-if (process.env.VERCEL) {
-  const targetDb = path.join(os.tmpdir(), 'erp.db');
-  const sourceDb = path.join(__dirname, 'erp.db');
-  try {
-    if (!fs.existsSync(targetDb) && fs.existsSync(sourceDb)) {
-      fs.copyFileSync(sourceDb, targetDb);
-    }
-  } catch (e) {
-    console.warn('Could not copy seed db to tmpdir:', e.message);
-  }
-  dbPath = targetDb;
-} else {
-  dbPath = path.join(__dirname, 'erp.db');
+// Load environment variables (.env from root or server directory)
+try {
+  const dotenv = require('dotenv');
+  dotenv.config({ path: path.join(__dirname, '..', '..', '.env') });
+  dotenv.config({ path: path.join(__dirname, '..', '.env') });
+  dotenv.config();
+} catch (e) {
+  // dotenv optional if environment variables already set in process.env
 }
 
-let db;
+// Check if Supabase / PostgreSQL connection string is provided
+const supabaseDbUrl = process.env.SUPABASE_DB_URL || process.env.DATABASE_URL;
+const isSupabase = Boolean(supabaseDbUrl);
+
+let db = null;
+let pool = null;
+let supabaseClient = null;
 let query, getOne, run, execute;
 
-try {
-  const sqlite3 = require('sqlite3').verbose();
-  const sdb = new sqlite3.Database(dbPath);
-  sdb.run('PRAGMA foreign_keys = ON');
-
-  query = (sql, params = []) => {
-    return new Promise((resolve, reject) => {
-      sdb.all(sql, params, (err, rows) => {
-        if (err) reject(err);
-        else resolve(rows);
-      });
-    });
-  };
-
-  getOne = (sql, params = []) => {
-    return new Promise((resolve, reject) => {
-      sdb.get(sql, params, (err, row) => {
-        if (err) reject(err);
-        else resolve(row);
-      });
-    });
-  };
-
-  run = (sql, params = []) => {
-    return new Promise((resolve, reject) => {
-      sdb.run(sql, params, function (err) {
-        if (err) reject(err);
-        else resolve({ lastID: this.lastID, changes: this.changes });
-      });
-    });
-  };
-
-  execute = (sql) => {
-    return new Promise((resolve, reject) => {
-      sdb.exec(sql, (err) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-  };
-
-  db = sdb;
-} catch (loadErr) {
+// Optional: Initialize Supabase JavaScript SDK if credentials are present
+if (process.env.SUPABASE_URL && (process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY)) {
   try {
-    const { DatabaseSync } = require('node:sqlite');
-    const nodeDb = new DatabaseSync(dbPath);
-    nodeDb.exec('PRAGMA foreign_keys = ON');
+    const { createClient } = require('@supabase/supabase-js');
+    supabaseClient = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY
+    );
+  } catch (err) {
+    console.warn('[Supabase] Failed to initialize Supabase JS client:', err.message);
+  }
+}
 
-    query = async (sql, params = []) => {
-      const stmt = nodeDb.prepare(sql);
-      return stmt.all(...params);
+/**
+ * Helper to convert SQLite '?' parameter placeholders to PostgreSQL '$1, $2, ...'
+ */
+function convertPlaceholders(sql) {
+  let paramIndex = 1;
+  return sql.replace(/\?/g, () => `$${paramIndex++}`);
+}
+
+if (isSupabase) {
+  // ==========================================
+  // SUPABASE / POSTGRESQL ENGINE
+  // ==========================================
+  const { Pool, types } = require('pg');
+
+  // Parse BIGINT (COUNT(*) and INT8) into integer numbers in JavaScript
+  types.setTypeParser(20, (val) => (val === null ? null : parseInt(val, 10)));
+  // Parse NUMERIC / DECIMAL into float numbers in JavaScript
+  types.setTypeParser(1700, (val) => (val === null ? null : parseFloat(val)));
+
+  pool = new Pool({
+    connectionString: supabaseDbUrl,
+    ssl: { rejectUnauthorized: false } // Required by Supabase connection pooler
+  });
+
+  query = async (sql, params = []) => {
+    const formattedSql = convertPlaceholders(sql);
+    const res = await pool.query(formattedSql, params);
+    return res.rows;
+  };
+
+  getOne = async (sql, params = []) => {
+    const formattedSql = convertPlaceholders(sql);
+    const res = await pool.query(formattedSql, params);
+    return res.rows[0] || null;
+  };
+
+  run = async (sql, params = []) => {
+    let pgSql = sql.trim();
+    const isInsert = /^INSERT\s+INTO/i.test(pgSql);
+    if (isInsert && !/RETURNING/i.test(pgSql)) {
+      pgSql += ' RETURNING id';
+    }
+    const formattedSql = convertPlaceholders(pgSql);
+    const res = await pool.query(formattedSql, params);
+    return {
+      lastID: res.rows && res.rows[0] && res.rows[0].id ? res.rows[0].id : null,
+      changes: res.rowCount
+    };
+  };
+
+  execute = async (sql) => {
+    await pool.query(sql);
+  };
+
+  db = pool;
+  console.log('[Database] Configured for Supabase PostgreSQL cloud database.');
+
+} else {
+  // ==========================================
+  // LOCAL SQLITE FALLBACK ENGINE
+  // ==========================================
+  let dbPath;
+  if (process.env.VERCEL) {
+    const targetDb = path.join(os.tmpdir(), 'erp.db');
+    const sourceDb = path.join(__dirname, 'erp.db');
+    try {
+      if (!fs.existsSync(targetDb) && fs.existsSync(sourceDb)) {
+        fs.copyFileSync(sourceDb, targetDb);
+      }
+    } catch (e) {
+      console.warn('Could not copy seed db to tmpdir:', e.message);
+    }
+    dbPath = targetDb;
+  } else {
+    dbPath = path.join(__dirname, 'erp.db');
+  }
+
+  try {
+    const sqlite3 = require('sqlite3').verbose();
+    const sdb = new sqlite3.Database(dbPath);
+    sdb.run('PRAGMA foreign_keys = ON');
+
+    query = (sql, params = []) => {
+      return new Promise((resolve, reject) => {
+        sdb.all(sql, params, (err, rows) => {
+          if (err) reject(err);
+          else resolve(rows);
+        });
+      });
     };
 
-    getOne = async (sql, params = []) => {
-      const stmt = nodeDb.prepare(sql);
-      return stmt.get(...params);
+    getOne = (sql, params = []) => {
+      return new Promise((resolve, reject) => {
+        sdb.get(sql, params, (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        });
+      });
     };
 
-    run = async (sql, params = []) => {
-      const stmt = nodeDb.prepare(sql);
-      const result = stmt.run(...params);
-      return { lastID: Number(result.lastInsertRowid), changes: Number(result.changes) };
+    run = (sql, params = []) => {
+      return new Promise((resolve, reject) => {
+        sdb.run(sql, params, function (err) {
+          if (err) reject(err);
+          else resolve({ lastID: this.lastID, changes: this.changes });
+        });
+      });
     };
 
-    execute = async (sql) => {
-      nodeDb.exec(sql);
+    execute = (sql) => {
+      return new Promise((resolve, reject) => {
+        sdb.exec(sql, (err) => {
+          if (err) reject(err);
+          else resolve();
+        });
+      });
     };
 
-    db = nodeDb;
-    console.log('Using Node.js built-in node:sqlite engine.');
-  } catch (fallbackErr) {
-    console.error('Both sqlite3 and node:sqlite failed to load.');
-    throw loadErr;
+    db = sdb;
+  } catch (loadErr) {
+    try {
+      const { DatabaseSync } = require('node:sqlite');
+      const nodeDb = new DatabaseSync(dbPath);
+      nodeDb.exec('PRAGMA foreign_keys = ON');
+
+      query = async (sql, params = []) => {
+        const stmt = nodeDb.prepare(sql);
+        return stmt.all(...params);
+      };
+
+      getOne = async (sql, params = []) => {
+        const stmt = nodeDb.prepare(sql);
+        return stmt.get(...params);
+      };
+
+      run = async (sql, params = []) => {
+        const stmt = nodeDb.prepare(sql);
+        const result = stmt.run(...params);
+        return { lastID: Number(result.lastInsertRowid), changes: Number(result.changes) };
+      };
+
+      execute = async (sql) => {
+        nodeDb.exec(sql);
+      };
+
+      db = nodeDb;
+      console.log('Using Node.js built-in node:sqlite engine.');
+    } catch (fallbackErr) {
+      console.error('Both sqlite3 and node:sqlite failed to load.');
+      throw loadErr;
+    }
   }
 }
 
 // Initialize schema and seed data
 async function initDatabase() {
   let schemaSql;
-  try {
-    schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
-  } catch (e) {
-    schemaSql = require('./schemaSql');
+  if (isSupabase) {
+    try {
+      schemaSql = fs.readFileSync(path.join(__dirname, 'schema.postgres.sql'), 'utf-8');
+    } catch (e) {
+      schemaSql = require('./schemaPostgresSql');
+    }
+  } else {
+    try {
+      schemaSql = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf-8');
+    } catch (e) {
+      schemaSql = require('./schemaSql');
+    }
   }
+
   await execute(schemaSql);
 
   // Check if company settings exist
@@ -206,62 +306,13 @@ async function initDatabase() {
     }
   }
 
-  // Check Customers
-  const existingCust = await getOne('SELECT id FROM customers LIMIT 1');
-  if (!existingCust) {
-    const defaultCustomers = [
-      {
-        code: 'CUST-001',
-        name: 'Texmo Precision Tools Pvt Ltd',
-        address: 'Site No. 14, Mettupalayam Road, GN Mills Post, Coimbatore - 641029',
-        gst: '33AAACT1984Q1Z2',
-        type: 'Private Limited',
-        contact: 'Mr. S. Ramanathan',
-        phone: '98422 12345',
-        email: 'purchase@texmopowertools.com'
-      },
-      {
-        code: 'CUST-002',
-        name: 'Roots Industries India Limited',
-        address: 'R.K.G. Industrial Estate, Ganapathy, Coimbatore - 641006',
-        gst: '33AAACR2981M1ZX',
-        type: 'Public Limited',
-        contact: 'Mr. K. Murugesan',
-        phone: '98940 56789',
-        email: 'stores@roots.co.in'
-      },
-      {
-        code: 'CUST-003',
-        name: 'Lakshmi Machine Works Ltd',
-        address: 'Perianaickenpalayam, SRKV Post, Coimbatore - 641020',
-        gst: '33AAACL1290F1Z4',
-        type: 'Public Limited',
-        contact: 'Mr. R. Balaji',
-        phone: '94433 78901',
-        email: 'logistics@lmw.co.in'
-      },
-      {
-        code: 'CUST-004',
-        name: 'Sundaram Fasteners Limited',
-        address: 'Plot No. 24, SIDCO Industrial Estate, Kurichi, Coimbatore - 641021',
-        gst: '33AAACS5514E1Z1',
-        type: 'Corporate',
-        contact: 'Mrs. V. Geetha',
-        phone: '97890 23456',
-        email: 'dispatch@sundaramfasteners.com'
-      }
-    ];
+  // Note: Customer master starts empty and fresh for the user to add real clients.
 
-    for (const c of defaultCustomers) {
-      await run(`
-        INSERT INTO customers (
-          customer_code, company_name, address, gst_no, company_type, contact_person, phone, email
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `, [c.code, c.name, c.address, c.gst, c.type, c.contact, c.phone, c.email]);
-    }
+  if (isSupabase) {
+    console.log('[Supabase] Database connected, schema checked and ready.');
+  } else {
+    console.log('[Database] SQLite database initialized successfully with schema and demo data.');
   }
-
-  console.log('Database initialized successfully with schema and demo data.');
 }
 
 // Audit logger helper
@@ -278,6 +329,9 @@ async function logAudit(userId, username, action, entityType, entityId, details)
 
 module.exports = {
   db,
+  pool,
+  isSupabase,
+  supabase: supabaseClient,
   query,
   getOne,
   run,

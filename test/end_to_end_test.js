@@ -18,11 +18,11 @@ async function runEndToEndTests() {
 
   // 2. Authentication test
   console.log('[TEST 2] Testing authentication credentials...');
-  const admin = await getOne('SELECT * FROM users WHERE username = "admin"');
+  const admin = await getOne("SELECT * FROM users WHERE username = 'admin'");
   const adminPassMatch = await bcrypt.compare('admin123', admin.password_hash);
   assert(adminPassMatch, 'Admin password must match');
 
-  const worker = await getOne('SELECT * FROM users WHERE username = "worker1"');
+  const worker = await getOne("SELECT * FROM users WHERE username = 'worker1'");
   const workerPassMatch = await bcrypt.compare('worker123', worker.password_hash);
   assert(workerPassMatch, 'Worker password must match');
 
@@ -38,8 +38,15 @@ async function runEndToEndTests() {
 
   // 4. Inward Stock Entry Creation
   console.log('[TEST 4] Testing Inward Stock Entry creation with multiple items...');
-  const customer = await getOne('SELECT id, company_name FROM customers WHERE company_name LIKE "Texmo%"');
-  assert(customer, 'Texmo customer must exist');
+  let customer = await getOne("SELECT id, company_name FROM customers WHERE company_name LIKE 'Texmo%'");
+  if (!customer) {
+    const res = await run(`
+      INSERT INTO customers (customer_code, company_name, address, gst_no, company_type, contact_person, phone, email)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `, ['CUST-TEST', 'Texmo Precision Tools Pvt Ltd', 'Coimbatore', '33AAACT1984Q1Z2', 'Private Limited', 'Mr. Test', '9842212345', 'test@texmo.com']);
+    customer = await getOne("SELECT id, company_name FROM customers WHERE id = ?", [res.lastID]);
+  }
+  assert(customer, 'Test customer must exist');
 
   const inwardNo = `INW-TEST-${Date.now()}`;
   const inwardResult = await run(`
@@ -52,8 +59,8 @@ async function runEndToEndTests() {
   const inwardId = inwardResult.lastID;
 
   // Insert inward items: 100 STEEL TRAY (@ 50) and 50 PLASTIC TRAY (@ 30)
-  const steelTray = await getOne('SELECT id, description, unit_value FROM goods WHERE description = "STEEL TRAY"');
-  const plasticTray = await getOne('SELECT id, description, unit_value FROM goods WHERE description = "PLASTIC TRAY"');
+  const steelTray = await getOne("SELECT id, description, unit_value FROM goods WHERE description = 'STEEL TRAY'");
+  const plasticTray = await getOne("SELECT id, description, unit_value FROM goods WHERE description = 'PLASTIC TRAY'");
 
   const item1 = await run(`
     INSERT INTO inward_items (

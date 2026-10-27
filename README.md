@@ -111,3 +111,42 @@ Then navigate to `http://localhost:5000`.
    - Stock Ledger automatically reflects remaining pending balance: 60 `STEEL TRAY` and 30 `PLASTIC TRAY`.
    - Daily report and Customer report update in real-time.
    - Download reports in CSV / Excel format.
+
+---
+
+## ⚡ Connecting to Supabase (Cloud PostgreSQL)
+
+The application supports dual database modes: local **SQLite** (default) and **Supabase (PostgreSQL)**.
+
+### Step 1: Create a Supabase Project
+1. Log into [Supabase](https://supabase.com) and create a new project.
+2. Note your database password when creating the project.
+
+### Step 2: Copy Connection String
+1. In the Supabase Dashboard, go to **Project Settings** -> **Database**.
+2. Scroll down to **Connection string** -> Select **URI** mode.
+3. Choose either:
+   - **Transaction Pooler (Port 6543)** *(Recommended)*:
+     `postgresql://postgres.[project-ref]:[YOUR-PASSWORD]@aws-0-[region].pooler.supabase.com:6543/postgres`
+   - **Session Pooler (Port 5432)**:
+     `postgresql://postgres.[project-ref]:[YOUR-PASSWORD]@aws-0-[region].pooler.supabase.com:5432/postgres`
+
+### Step 3: Configure `.env`
+Open [`.env`](file:///.env) in the project root and set:
+```env
+SUPABASE_DB_URL=postgresql://postgres.[project-ref]:[YOUR-PASSWORD]@aws-0-[region].pooler.supabase.com:6543/postgres
+```
+
+### Step 4: Test Connection & Migrate Data
+1. Verify connectivity:
+   ```bash
+   npm run db:test-supabase
+   ```
+2. Migrate all tables, schema, and existing SQLite data to Supabase:
+   ```bash
+   npm run db:migrate-supabase
+   ```
+3. Start the application:
+   ```bash
+   npm start
+   ```

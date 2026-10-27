@@ -45,20 +45,22 @@ router.get('/dashboard-stats', authenticate, async (req, res) => {
     `);
 
     // Inward vs Outward last 7 days
-    const recentActivity = await query(`
-      SELECT 
-        d.dt as date,
-        COALESCE((SELECT SUM(total_quantity) FROM inward_entries WHERE DATE(created_at) = d.dt), 0) as inward_qty,
-        COALESCE((SELECT SUM(oi.quantity) FROM outward_items oi JOIN outward_challans oc ON oi.challan_id = oc.id WHERE DATE(oc.challan_date) = d.dt), 0) as outward_qty
-      FROM (
-        SELECT DATE('now', '-' || num || ' days') as dt
-        FROM (
-          SELECT 0 as num UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL 
-          SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6
-        )
-      ) d
-      ORDER BY d.dt ASC
-    `);
+    const dates = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().split('T')[0]);
+    }
+
+    const recentActivity = await Promise.all(dates.map(async (dt) => {
+      const inRow = await getOne('SELECT COALESCE(SUM(total_quantity), 0) as inward_qty FROM inward_entries WHERE DATE(created_at) = DATE(?)', [dt]);
+      const outRow = await getOne('SELECT COALESCE(SUM(oi.quantity), 0) as outward_qty FROM outward_items oi JOIN outward_challans oc ON oi.challan_id = oc.id WHERE DATE(oc.challan_date) = DATE(?)', [dt]);
+      return {
+        date: dt,
+        inward_qty: Number(inRow?.inward_qty || 0),
+        outward_qty: Number(outRow?.outward_qty || 0)
+      };
+    }));
 
     // Top pending materials
     const pendingMaterials = await query(`

@@ -1,7 +1,9 @@
 import React, { useRef } from 'react';
-import { Printer, Download, ArrowLeft, Building2 } from 'lucide-react';
+import { Printer, Download, ArrowLeft } from 'lucide-react';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
+import logoSb from '../../assets/logo_sb.png';
+import logoTuv from '../../assets/logo_tuv_iso9001.png';
 
 export default function ChallanPrintPreview({ challan, items, company, onBack }) {
   const printRef = useRef(null);
@@ -27,10 +29,10 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
 
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`Challan_${challan.challan_no.replace(/[/\\?%*:|"<>]/g, '_')}.pdf`);
+      pdf.save(`DC_${String(challan.challan_no || 'Challan').replace(/[/\\?%*:|"<>]/g, '_')}.pdf`);
     } catch (err) {
       console.error('PDF generation error:', err);
-      alert('Could not generate PDF. You can also click "Print" and choose "Save as PDF".');
+      alert('Could not generate PDF directly. Please click "Print" and select "Save as PDF".');
     }
   };
 
@@ -45,13 +47,17 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
   const taxAmount = parseFloat(challan.tax_amount || 0);
   const grandTotal = parseFloat(challan.grand_total || 0);
 
+  // Minimum rows to visually replicate the Excel sheet grid height
+  const minRows = 8;
+  const emptyRowsCount = Math.max(0, minRows - (items?.length || 0));
+
   return (
     <div className="space-y-6">
-      {/* Top Action Bar (Hidden during printing) */}
+      {/* Top Action Bar (Hidden in Print) */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 print:hidden">
         <button
           onClick={onBack}
-          className="inline-flex items-center space-x-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition"
+          className="inline-flex items-center space-x-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition cursor-pointer"
         >
           <ArrowLeft className="w-4 h-4" />
           <span>Back to Challan List</span>
@@ -60,14 +66,14 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
         <div className="flex items-center space-x-3">
           <button
             onClick={handleDownloadPdf}
-            className="inline-flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-xs"
+            className="inline-flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
           >
             <Download className="w-4 h-4" />
             <span>Download PDF</span>
           </button>
           <button
             onClick={handlePrint}
-            className="inline-flex items-center space-x-2 px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 rounded-xl text-xs font-black shadow-md transition"
+            className="inline-flex items-center space-x-2 px-6 py-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 rounded-xl text-xs font-black shadow-md transition cursor-pointer"
           >
             <Printer className="w-4 h-4" />
             <span>Print Challan (A4)</span>
@@ -82,121 +88,138 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
           className="challan-print-sheet bg-white text-black w-full max-w-[210mm] min-h-[297mm] p-6 shadow-xl border border-slate-300 print:border-none print:shadow-none print:p-0 print:max-w-none text-xs leading-tight font-sans"
           style={{ boxSizing: 'border-box' }}
         >
-          {/* HEADER SECTION (Yellow Header background matching reference image) */}
+          {/* ============================================================== */}
+          {/* HEADER: BRIGHT YELLOW CONTAINER WITH TWO CORNER LOGOS          */}
+          {/* ============================================================== */}
           <div className="border-2 border-black bg-[#ffeb3b] p-3 text-center relative mb-0">
-            {/* Top Row: GST on left, Phone on right */}
-            <div className="flex justify-between items-start text-[11px] font-bold">
+            {/* Top row: GST on left, Phone on right */}
+            <div className="flex justify-between items-center text-[11px] font-black tracking-tight mb-1">
               <span>GST : {companyGst}</span>
               <span>{companyPhone}</span>
             </div>
 
-            {/* Left Certification Logo Badge Simulation */}
-            <div className="absolute left-3 top-7 w-9 h-10 border border-black/40 bg-white flex flex-col items-center justify-center p-0.5 shadow-2xs">
-              <span className="text-[7px] font-black text-blue-800">ISO</span>
-              <span className="text-[6px] font-bold text-slate-700">9001</span>
+            {/* Left Brand Logo (SB Logo from Excel) */}
+            <div className="absolute left-3 top-8 flex items-center justify-center">
+              <img
+                src={logoSb}
+                alt="SB Logo"
+                className="h-14 w-auto object-contain drop-shadow-xs"
+              />
             </div>
 
-            {/* Right TUV Badge Simulation */}
-            <div className="absolute right-3 top-7 w-9 h-10 border border-blue-900 bg-blue-700 text-white flex flex-col items-center justify-center p-0.5 shadow-2xs rounded-sm">
-              <span className="text-[7px] font-black tracking-tighter">TUV</span>
-              <span className="text-[5px] font-bold">SUD</span>
+            {/* Right ISO Certification Badge (TÜV SÜD ISO 9001 from Excel) */}
+            <div className="absolute right-3 top-8 flex items-center justify-center">
+              <img
+                src={logoTuv}
+                alt="TÜV SÜD ISO 9001"
+                className="h-14 w-auto object-contain drop-shadow-xs"
+              />
             </div>
 
-            {/* Main Title & Company Name */}
-            <h1 className="text-base sm:text-lg font-black uppercase tracking-wider text-black mt-0.5">
-              DELIVERY CHALLAN Cum Packing Note
-            </h1>
-            <h2 className="text-lg sm:text-xl font-black text-black mt-0.5 tracking-tight font-serif">
-              {companyName}
-            </h2>
-
-            {/* Address & Email */}
-            <p className="text-[10px] font-bold text-black whitespace-pre-line mt-0.5 max-w-lg mx-auto">
-              {companyAddress}
-            </p>
-            <p className="text-[10px] font-bold text-black mt-0.5">
-              Email: {companyEmail}
-            </p>
+            {/* Center Content */}
+            <div className="px-16">
+              <h1 className="text-sm sm:text-base font-black uppercase tracking-wider text-black">
+                DELIVERY&nbsp;&nbsp;CHALLAN Cum Packing Note
+              </h1>
+              <h2 className="text-lg sm:text-xl font-black text-black mt-1 tracking-tight font-serif">
+                {companyName}
+              </h2>
+              <p className="text-[10px] font-bold text-black whitespace-pre-line mt-1 max-w-lg mx-auto leading-snug">
+                {companyAddress}
+              </p>
+              <p className="text-[10px] font-bold text-black mt-0.5">
+                Email: {companyEmail}
+              </p>
+            </div>
           </div>
 
-          {/* TWO-COLUMN PARTY & CHALLAN METADATA SECTION */}
+          {/* ============================================================== */}
+          {/* TWO-COLUMN PARTY DETAILS & DC METADATA BOX                    */}
+          {/* ============================================================== */}
           <div className="grid grid-cols-12 border-x-2 border-b-2 border-black text-[11px]">
-            {/* LEFT COLUMN: Customer "To" Box (Cols 1 to 7) */}
-            <div className="col-span-7 border-r-2 border-black p-2 flex flex-col justify-between min-h-[140px]">
+            {/* Left Column: Customer "To" Box (Cols 1 to 7) */}
+            <div className="col-span-7 border-r-2 border-black p-2 flex flex-col justify-between min-h-[145px]">
               <div>
-                <div className="inline-block bg-[#ffeb3b] px-2 py-0.5 font-black border border-black text-[10px] mb-1">
+                <div className="inline-block bg-[#ffeb3b] px-3 py-0.5 font-black border border-black text-[10px] mb-1.5 uppercase">
                   To
                 </div>
                 <div className="font-black text-sm text-black mt-0.5">
                   {challan.customer_name}
                 </div>
-                <div className="font-semibold text-black whitespace-pre-line mt-1 text-[11px]">
+                <div className="font-semibold text-black whitespace-pre-line mt-1 text-[11px] leading-snug">
                   {challan.customer_address}
                 </div>
               </div>
-              <div className="mt-2 pt-1 border-t border-black/20 font-bold">
+              <div className="mt-2 pt-1 border-t border-black/30 font-bold text-[11px]">
                 GSTIN: <span className="font-mono font-black">{challan.customer_gst}</span>
               </div>
             </div>
 
-            {/* RIGHT COLUMN: DC & Reference Details (Cols 8 to 12) */}
+            {/* Right Column: DC & Reference Details (Cols 8 to 12) */}
             <div className="col-span-5 p-0 text-[11px]">
               <table className="w-full h-full border-collapse">
                 <tbody>
                   <tr className="border-b border-black">
-                    <td className="p-1 font-black bg-[#ffeb3b]/60 w-28 border-r border-black">
+                    <td className="p-1 font-black bg-[#ffeb3b]/50 w-28 border-r border-black">
                       DC No
                     </td>
+                    <td className="p-1 text-center font-bold w-3 border-r border-black">:</td>
                     <td className="p-1 font-mono font-black text-black">
-                      : {challan.challan_no}
+                      {challan.challan_no}
                     </td>
                   </tr>
                   <tr className="border-b border-black">
-                    <td className="p-1 font-bold bg-[#ffeb3b]/40 border-r border-black">
+                    <td className="p-1 font-bold bg-[#ffeb3b]/30 border-r border-black">
                       Date
                     </td>
+                    <td className="p-1 text-center font-bold border-r border-black">:</td>
                     <td className="p-1 font-semibold">
-                      : {challan.challan_date}
+                      {challan.challan_date}
                     </td>
                   </tr>
                   <tr className="border-b border-black">
-                    <td className="p-1 font-bold bg-[#ffeb3b]/40 border-r border-black">
+                    <td className="p-1 font-bold bg-[#ffeb3b]/30 border-r border-black">
                       P.O. No
                     </td>
+                    <td className="p-1 text-center font-bold border-r border-black">:</td>
                     <td className="p-1 font-semibold">
-                      : {challan.po_no || '-'}
+                      {challan.po_no || '-'}
                     </td>
                   </tr>
                   <tr className="border-b border-black">
-                    <td className="p-1 font-bold bg-[#ffeb3b]/40 border-r border-black">
+                    <td className="p-1 font-bold bg-[#ffeb3b]/30 border-r border-black">
                       P.O. Date
                     </td>
+                    <td className="p-1 text-center font-bold border-r border-black">:</td>
                     <td className="p-1 font-semibold">
-                      : {challan.po_date || '-'}
+                      {challan.po_date || '-'}
                     </td>
                   </tr>
                   <tr className="border-b border-black">
-                    <td className="p-1 font-bold bg-[#ffeb3b]/40 border-r border-black">
+                    <td className="p-1 font-bold bg-[#ffeb3b]/30 border-r border-black">
                       Cust DC No
                     </td>
+                    <td className="p-1 text-center font-bold border-r border-black">:</td>
                     <td className="p-1 font-semibold">
-                      : {challan.cust_dc_no || '-'}
+                      {challan.cust_dc_no || '-'}
                     </td>
                   </tr>
                   <tr className="border-b border-black">
-                    <td className="p-1 font-bold bg-[#ffeb3b]/40 border-r border-black">
+                    <td className="p-1 font-bold bg-[#ffeb3b]/30 border-r border-black">
                       Cust DC Date
                     </td>
+                    <td className="p-1 text-center font-bold border-r border-black">:</td>
                     <td className="p-1 font-semibold">
-                      : {challan.cust_dc_date || '-'}
+                      {challan.cust_dc_date || '-'}
                     </td>
                   </tr>
                   <tr>
-                    <td className="p-1 font-bold bg-[#ffeb3b]/40 border-r border-black">
+                    <td className="p-1 font-bold bg-[#ffeb3b]/30 border-r border-black">
                       Vehicle No
                     </td>
+                    <td className="p-1 text-center font-bold border-r border-black">:</td>
                     <td className="p-1 font-mono font-black uppercase">
-                      : {challan.vehicle_no || '-'}
+                      {challan.vehicle_no || '-'}
                     </td>
                   </tr>
                 </tbody>
@@ -204,7 +227,9 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
             </div>
           </div>
 
-          {/* ITEM TABLE (Yellow Header with distinct borders matching reference) */}
+          {/* ============================================================== */}
+          {/* ITEMS TABLE (EXACT 6 EXCEL COLUMNS & BRIGHT YELLOW HEADER)    */}
+          {/* ============================================================== */}
           <div className="border-x-2 border-b-2 border-black">
             <table className="w-full border-collapse text-[11px]">
               <thead>
@@ -220,7 +245,7 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                 </tr>
               </thead>
               <tbody>
-                {items.map((item, idx) => (
+                {items && items.map((item, idx) => (
                   <tr key={item.id || idx} className="border-b border-black/30">
                     <td className="p-2 text-center font-bold border-r-2 border-black">
                       {String(idx + 1).padStart(2, '0')}
@@ -230,9 +255,11 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                     </td>
                     <td className="p-2 font-bold uppercase border-r-2 border-black px-3">
                       {item.item_description}
-                      <span className="font-normal font-mono text-[10px] text-slate-600 ml-2">
-                        (@ ₹{parseFloat(item.unit_value).toFixed(2)} = ₹{parseFloat(item.total_value).toFixed(2)})
-                      </span>
+                      {item.unit_value > 0 && (
+                        <span className="font-normal font-mono text-[10px] text-slate-600 ml-2">
+                          (@ ₹{parseFloat(item.unit_value).toFixed(2)} = ₹{parseFloat(item.total_value).toFixed(2)})
+                        </span>
+                      )}
                     </td>
                     <td className="p-2 text-center font-black text-sm border-r-2 border-black">
                       {item.quantity}
@@ -246,9 +273,9 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                   </tr>
                 ))}
 
-                {/* Empty rows filler to match reference sheet height */}
-                {Array.from({ length: Math.max(0, 5 - items.length) }).map((_, i) => (
-                  <tr key={`empty-${i}`} className="border-b border-black/10 h-7">
+                {/* Empty rows to replicate Excel height and clean page proportions */}
+                {Array.from({ length: emptyRowsCount }).map((_, i) => (
+                  <tr key={`empty-${i}`} className="border-b border-black/15 h-7">
                     <td className="border-r-2 border-black"></td>
                     <td className="border-r-2 border-black"></td>
                     <td className="border-r-2 border-black"></td>
@@ -258,9 +285,11 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                   </tr>
                 ))}
 
-                {/* VALUE OF GOODS, TAX & GRAND TOTAL ROWS INSIDE TABLE GRID */}
+                {/* ========================================================== */}
+                {/* VALUE OF GOODS, TAX & GRAND TOTAL (Excel Row 30 & 31)      */}
+                {/* ========================================================== */}
                 <tr className="border-t-2 border-black font-bold">
-                  <td colSpan="2" className="border-r-2 border-black bg-slate-50"></td>
+                  <td colSpan="2" className="border-r-2 border-black bg-slate-50/50"></td>
                   <td className="p-2 border-r-2 border-black text-right pr-4 font-black">
                     Value of Goods
                   </td>
@@ -270,7 +299,7 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                 </tr>
 
                 <tr className="border-t border-black font-bold">
-                  <td colSpan="2" className="border-r-2 border-black bg-slate-50"></td>
+                  <td colSpan="2" className="border-r-2 border-black bg-slate-50/50"></td>
                   <td className="p-2 border-r-2 border-black text-right pr-4">
                     Tax @ {taxRate}% (GST)
                   </td>
@@ -280,7 +309,7 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                 </tr>
 
                 <tr className="border-t-2 border-black font-black bg-[#ffeb3b]/40">
-                  <td colSpan="2" className="border-r-2 border-black bg-slate-50"></td>
+                  <td colSpan="2" className="border-r-2 border-black bg-slate-50/50"></td>
                   <td className="p-2.5 border-r-2 border-black text-right pr-4 text-sm font-black uppercase">
                     Grand Total
                   </td>
@@ -289,7 +318,7 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                   </td>
                 </tr>
 
-                {/* Note Row inside goods table matching reference */}
+                {/* Note Row (Excel Row 34 & 35) */}
                 {challan.note && (
                   <tr className="border-t border-black">
                     <td colSpan="2" className="border-r-2 border-black bg-[#ffeb3b]/40 font-bold p-1 text-center">
@@ -304,7 +333,9 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
             </table>
           </div>
 
-          {/* REMARKS ROW (Yellow header label on left, text on right) */}
+          {/* ============================================================== */}
+          {/* REMARKS ROW (Excel Row 37 & 38)                               */}
+          {/* ============================================================== */}
           <div className="border-x-2 border-b-2 border-black flex text-[11px]">
             <div className="bg-[#ffeb3b] px-3 py-1.5 font-black border-r-2 border-black w-28 flex-shrink-0 flex items-center">
               Remarks :
@@ -314,9 +345,11 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
             </div>
           </div>
 
-          {/* FOOTER & SIGNATURE SECTION (Exact matching of reference image) */}
+          {/* ============================================================== */}
+          {/* FOOTER & DUAL SIGNATURE BOX (Excel Row 40-44)                  */}
+          {/* ============================================================== */}
           <div className="border-x-2 border-b-2 border-black grid grid-cols-12 text-[11px] min-h-[110px]">
-            {/* Left box: Receiving Authority */}
+            {/* Left Box: Receiving Authority (Cols A-E in Excel) */}
             <div className="col-span-6 border-r-2 border-black p-3 flex flex-col justify-between">
               <div>
                 <p className="font-bold">Received the above goods in good condition</p>
@@ -329,7 +362,7 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
               </div>
             </div>
 
-            {/* Right box: Company Signature (Bright Yellow background matching reference!) */}
+            {/* Right Box: Company Authorized Signatory (Bright Yellow in Excel) */}
             <div className="col-span-6 bg-[#ffeb3b] p-3 flex flex-col justify-between">
               <div>
                 <span className="font-bold text-black">For </span>
@@ -342,7 +375,7 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
             </div>
           </div>
 
-          {/* Reference notice footer */}
+          {/* Reference notice footer (hidden in print) */}
           <div className="mt-2 text-[9px] text-slate-400 text-center print:hidden">
             A4 Print Optimized • Linked to Inward Consignment {challan.inward_no} • Generated on {new Date().toLocaleDateString('en-IN')}
           </div>

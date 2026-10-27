@@ -7,7 +7,7 @@
     "start": "node server/server.js",
     "server": "node server/server.js",
     "client": "npm --prefix client run dev",
-    "build": "npm --prefix client run build",
+    "build": "npm --prefix client install && npm --prefix client run build",
     "build:client": "npm --prefix client run build",
     "test": "node test/end_to_end_test.js",
     "db:test-supabase": "node server/db/test-supabase.js",
@@ -23,7 +23,9 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.23.1",
-    "sql.js": "^1.14.2",
+    "sql.js": "^1.14.2"
+  },
+  "optionalDependencies": {
     "sqlite3": "^5.1.7"
   },
   "keywords": [
@@ -34,5 +36,8 @@
     "inventory"
   ],
   "author": "Shri.Bharathi & Co.",
-  "license": "ISC"
+  "license": "ISC",
+  "workspaces": [
+    "client"
+  ]
 }

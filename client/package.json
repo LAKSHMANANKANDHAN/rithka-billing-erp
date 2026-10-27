@@ -22,6 +22,7 @@
     "react-chartjs-2": "^5.3.1",
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.4",
+    "rithka-billing-software": "file:..",
     "tailwindcss": "^4.3.3"
   },
   "devDependencies": {

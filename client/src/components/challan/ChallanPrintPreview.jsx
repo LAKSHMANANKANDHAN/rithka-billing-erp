@@ -42,11 +42,6 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
   const companyAddress = company?.address || 'Site No : 9, S.F No : 208/1B , Anjugam Nagar, Ambigai Nagar Road,\nChinnavedampatti (PO), Coimbatore - 641 049';
   const companyEmail = company?.email || 'a.yuvarajan@gmail.com';
 
-  const taxRate = parseFloat(challan.tax_rate ?? 9.0);
-  const subtotal = parseFloat(challan.subtotal || 0);
-  const taxAmount = parseFloat(challan.tax_amount || 0);
-  const grandTotal = parseFloat(challan.grand_total || 0);
-
   // Minimum rows to visually replicate the Excel sheet grid height
   const minRows = 8;
   const emptyRowsCount = Math.max(0, minRows - (items?.length || 0));
@@ -228,7 +223,7 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
           </div>
 
           {/* ============================================================== */}
-          {/* ITEMS TABLE (EXACT 6 EXCEL COLUMNS & BRIGHT YELLOW HEADER)    */}
+          {/* ITEMS TABLE (7 COLUMNS WITH TOTAL & BRIGHT YELLOW HEADER)      */}
           {/* ============================================================== */}
           <div className="border-x-2 border-b-2 border-black">
             <table className="w-full border-collapse text-[11px]">
@@ -241,37 +236,44 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                   </th>
                   <th className="p-1.5 w-20 border-r-2 border-black">Quantity</th>
                   <th className="p-1.5 w-16 border-r-2 border-black">UOM</th>
-                  <th className="p-1.5 w-28">Kind of Package</th>
+                  <th className="p-1.5 w-24 border-r-2 border-black">Kind of Package</th>
+                  <th className="p-1.5 w-24 text-right pr-3">Total</th>
                 </tr>
               </thead>
               <tbody>
-                {items && items.map((item, idx) => (
-                  <tr key={item.id || idx} className="border-b border-black/30">
-                    <td className="p-2 text-center font-bold border-r-2 border-black">
-                      {String(idx + 1).padStart(2, '0')}
-                    </td>
-                    <td className="p-2 text-center font-mono border-r-2 border-black">
-                      {item.your_ref_no || '-'}
-                    </td>
-                    <td className="p-2 font-bold uppercase border-r-2 border-black px-3">
-                      {item.item_description}
-                      {item.unit_value > 0 && (
-                        <span className="font-normal font-mono text-[10px] text-slate-600 ml-2">
-                          (@ ₹{parseFloat(item.unit_value).toFixed(2)} = ₹{parseFloat(item.total_value).toFixed(2)})
-                        </span>
-                      )}
-                    </td>
-                    <td className="p-2 text-center font-black text-sm border-r-2 border-black">
-                      {item.quantity}
-                    </td>
-                    <td className="p-2 text-center font-bold border-r-2 border-black">
-                      {item.uom}
-                    </td>
-                    <td className="p-2 text-center font-semibold">
-                      {item.package_type || 'Loose'}
-                    </td>
-                  </tr>
-                ))}
+                {items && items.map((item, idx) => {
+                  const itemTotal = parseFloat(
+                    item.total_value != null && !isNaN(item.total_value) && Number(item.total_value) > 0
+                      ? item.total_value
+                      : (parseFloat(item.quantity || 0) * parseFloat(item.unit_value || 0)) || 0
+                  );
+
+                  return (
+                    <tr key={item.id || idx} className="border-b border-black/30">
+                      <td className="p-2 text-center font-bold border-r-2 border-black">
+                        {String(idx + 1).padStart(2, '0')}
+                      </td>
+                      <td className="p-2 text-center font-mono border-r-2 border-black">
+                        {item.your_ref_no || '-'}
+                      </td>
+                      <td className="p-2 font-bold uppercase border-r-2 border-black px-3">
+                        {item.item_description}
+                      </td>
+                      <td className="p-2 text-center font-black text-sm border-r-2 border-black">
+                        {item.quantity}
+                      </td>
+                      <td className="p-2 text-center font-bold border-r-2 border-black">
+                        {item.uom}
+                      </td>
+                      <td className="p-2 text-center font-semibold border-r-2 border-black">
+                        {item.package_type || 'Loose'}
+                      </td>
+                      <td className="p-2 text-right font-mono font-bold pr-3">
+                        ₹{itemTotal.toFixed(2)}
+                      </td>
+                    </tr>
+                  );
+                })}
 
                 {/* Empty rows to replicate Excel height and clean page proportions */}
                 {Array.from({ length: emptyRowsCount }).map((_, i) => (
@@ -281,50 +283,18 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                     <td className="border-r-2 border-black"></td>
                     <td className="border-r-2 border-black"></td>
                     <td className="border-r-2 border-black"></td>
+                    <td className="border-r-2 border-black"></td>
                     <td></td>
                   </tr>
                 ))}
 
-                {/* ========================================================== */}
-                {/* VALUE OF GOODS, TAX & GRAND TOTAL (Excel Row 30 & 31)      */}
-                {/* ========================================================== */}
-                <tr className="border-t-2 border-black font-bold">
-                  <td colSpan="2" className="border-r-2 border-black bg-slate-50/50"></td>
-                  <td className="p-2 border-r-2 border-black text-right pr-4 font-black">
-                    Value of Goods
-                  </td>
-                  <td colSpan="3" className="p-2 text-right font-mono font-black text-xs pr-4">
-                    ₹{subtotal.toFixed(2)}
-                  </td>
-                </tr>
-
-                <tr className="border-t border-black font-bold">
-                  <td colSpan="2" className="border-r-2 border-black bg-slate-50/50"></td>
-                  <td className="p-2 border-r-2 border-black text-right pr-4">
-                    Tax @ {taxRate}% (GST)
-                  </td>
-                  <td colSpan="3" className="p-2 text-right font-mono font-bold text-xs pr-4">
-                    ₹{taxAmount.toFixed(2)}
-                  </td>
-                </tr>
-
-                <tr className="border-t-2 border-black font-black bg-[#ffeb3b]/40">
-                  <td colSpan="2" className="border-r-2 border-black bg-slate-50/50"></td>
-                  <td className="p-2.5 border-r-2 border-black text-right pr-4 text-sm font-black uppercase">
-                    Grand Total
-                  </td>
-                  <td colSpan="3" className="p-2.5 text-right font-mono font-black text-sm pr-4 text-black">
-                    ₹{grandTotal.toFixed(2)}
-                  </td>
-                </tr>
-
                 {/* Note Row (Excel Row 34 & 35) */}
                 {challan.note && (
-                  <tr className="border-t border-black">
+                  <tr className="border-t-2 border-black">
                     <td colSpan="2" className="border-r-2 border-black bg-[#ffeb3b]/40 font-bold p-1 text-center">
                       Note
                     </td>
-                    <td colSpan="4" className="p-2 font-semibold italic text-black">
+                    <td colSpan="5" className="p-2 font-semibold italic text-black">
                       {challan.note}
                     </td>
                   </tr>

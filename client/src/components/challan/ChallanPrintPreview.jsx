@@ -237,7 +237,7 @@ export default function ChallanPrintPreview({ challan, items, company, onBack })
                   <th className="p-1.5 w-20 border-r-2 border-black">Quantity</th>
                   <th className="p-1.5 w-16 border-r-2 border-black">UOM</th>
                   <th className="p-1.5 w-24 border-r-2 border-black">Kind of Package</th>
-                  <th className="p-1.5 w-24 text-right pr-3">Total</th>
+                  <th className="p-1.5 w-28 text-right pr-3">Value of Goods</th>
                 </tr>
               </thead>
               <tbody>

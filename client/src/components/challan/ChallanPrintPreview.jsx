@@ -2,8 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Printer, Download, ArrowLeft, Edit3, Copy, Loader2 } from 'lucide-react';
 import html2canvas from 'html2canvas-pro';
 import jsPDF from 'jspdf';
-import logoSb from '../../assets/logo_sb.png';
-import logoTuv from '../../assets/logo_tuv_iso9001.png';
+import { logoSb, logoTuv } from '../../assets/logosDataUri';
 
 // Date formatter in dd-mm-yyyy
 export function formatDateDDMMYYYY(val) {

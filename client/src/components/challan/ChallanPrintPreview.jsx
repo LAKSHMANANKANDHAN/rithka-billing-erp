@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { Printer, Download, ArrowLeft, Edit3, Copy } from 'lucide-react';
-import html2canvas from 'html2canvas';
+import { Printer, Download, ArrowLeft, Edit3, Copy, Loader2 } from 'lucide-react';
+import html2canvas from 'html2canvas-pro';
 import jsPDF from 'jspdf';
 import logoSb from '../../assets/logo_sb.png';
 import logoTuv from '../../assets/logo_tuv_iso9001.png';
@@ -31,44 +31,108 @@ export function formatDateDDMMYYYY(val) {
 
 export default function ChallanPrintPreview({ challan, items, company, onBack, onEdit }) {
   const [activeTab, setActiveTab] = useState('all'); // 'all', 'original', 'duplicate', 'extra'
+  const [isDownloading, setIsDownloading] = useState(false);
   const printContainerRef = useRef(null);
+  const originalCopyRef = useRef(null);
 
   // Trigger browser print dialog for 3 copies (A5 sheet)
   const handlePrint = () => {
     window.print();
   };
 
-  // Generate and download multi-page A5 PDF with all 3 copies
+  // Generate and download single-page A5 PDF for "(ORIGINAL FOR RECIPIENT)" alone in low storage
   const handleDownloadPdf = async () => {
+    if (isDownloading) return;
+    setIsDownloading(true);
+
     try {
-      const copyElements = printContainerRef.current?.querySelectorAll('.challan-copy-container');
-      if (!copyElements || copyElements.length === 0) return;
-
-      const pdf = new jsPDF('p', 'mm', 'a5');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-
-      for (let i = 0; i < copyElements.length; i++) {
-        const el = copyElements[i];
-        const canvas = await html2canvas(el, {
-          scale: 2.5,
-          useCORS: true,
-          backgroundColor: '#ffffff',
-        });
-        const imgData = canvas.toDataURL('image/png');
-        const imgHeight = (canvas.height * pdfWidth) / canvas.width;
-
-        if (i > 0) {
-          pdf.addPage('a5', 'p');
-        }
-        pdf.addImage(imgData, 'PNG', 0, 4, pdfWidth, Math.min(imgHeight, pdfHeight - 8));
+      // Find the "ORIGINAL FOR RECIPIENT" page element specifically
+      let targetElement = originalCopyRef.current;
+      if (!targetElement && printContainerRef.current) {
+        targetElement = printContainerRef.current.querySelector('[data-copy-id="original"]');
+      }
+      if (!targetElement && printContainerRef.current) {
+        targetElement = printContainerRef.current.querySelector('.challan-copy-container');
+      }
+      if (!targetElement) {
+        throw new Error('Original Challan copy element not found');
       }
 
-      const safeChallanNo = String(challan.challan_no || 'Challan').replace(/[/\\?%*:|"<>]/g, '_');
-      pdf.save(`DC_${safeChallanNo}_A5_3Copies.pdf`);
+      // If original copy is currently hidden by active tab, make it temporarily visible for capture
+      const wasHidden = targetElement.classList.contains('hidden');
+      if (wasHidden) {
+        targetElement.classList.remove('hidden');
+        targetElement.style.display = 'block';
+      }
+
+      // Wait for any images (logos) to be fully loaded
+      const images = targetElement.querySelectorAll('img');
+      await Promise.all(
+        Array.from(images).map((img) => {
+          if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+          return new Promise((resolve) => {
+            img.onload = () => resolve();
+            img.onerror = () => resolve();
+            setTimeout(resolve, 300);
+          });
+        })
+      );
+
+      // Render canvas with html2canvas-pro (native support for Tailwind CSS v4)
+      const canvas = await html2canvas(targetElement, {
+        scale: 2, // High clarity for sharp text
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+      });
+
+      // Restore hidden class if it was modified
+      if (wasHidden) {
+        targetElement.classList.add('hidden');
+        targetElement.style.display = '';
+      }
+
+      // Compress canvas to high-efficiency JPEG (0.78 quality) for very low storage (~90 KB - 140 KB)
+      const imgData = canvas.toDataURL('image/jpeg', 0.78);
+
+      // Create single page A5 PDF (148mm x 210mm)
+      const pdf = new jsPDF({
+        orientation: 'p',
+        unit: 'mm',
+        format: 'a5',
+        compress: true,
+      });
+
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // 148 mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // 210 mm
+
+      const marginX = 5;
+      const contentWidth = pdfWidth - marginX * 2; // 138 mm
+      const contentHeight = (canvas.height * contentWidth) / canvas.width;
+      const marginY = Math.max(4, Math.min(8, (pdfHeight - contentHeight) / 2));
+
+      pdf.addImage(imgData, 'JPEG', marginX, marginY, contentWidth, contentHeight, undefined, 'FAST');
+
+      // Filename formatted as: date , challan number , company name
+      const cleanFileNamePart = (str) =>
+        String(str || '')
+          .trim()
+          .replace(/[/\\?%*:|"<>]/g, '-')
+          .replace(/\s+/g, ' ');
+
+      const dateStr = cleanFileNamePart(formatDateDDMMYYYY(challan.challan_date));
+      const challanStr = cleanFileNamePart(challan.challan_no || 'DC');
+      const companyStr = cleanFileNamePart(challan.customer_name || companyName);
+
+      const fileName = `${dateStr} , ${challanStr} , ${companyStr}.pdf`;
+
+      pdf.save(fileName);
     } catch (err) {
       console.error('PDF generation error:', err);
-      alert('Could not generate PDF directly. Please click "Print" and select "Save as PDF".');
+      alert(`Could not generate PDF directly (${err.message || 'Error'}). Please click "Print" and select "Save as PDF".`);
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -143,10 +207,16 @@ export default function ChallanPrintPreview({ challan, items, company, onBack, o
         <div className="flex items-center space-x-3">
           <button
             onClick={handleDownloadPdf}
-            className="inline-flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
+            disabled={isDownloading}
+            className="inline-flex items-center space-x-2 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-60"
+            title="Download Original Copy as low-size A5 PDF"
           >
-            <Download className="w-4 h-4" />
-            <span>Download PDF (3 Copies)</span>
+            {isDownloading ? (
+              <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+            ) : (
+              <Download className="w-4 h-4" />
+            )}
+            <span>{isDownloading ? 'Generating PDF...' : 'Download PDF (Original)'}</span>
           </button>
           <button
             onClick={handlePrint}
@@ -169,6 +239,8 @@ export default function ChallanPrintPreview({ challan, items, company, onBack, o
           return (
             <div
               key={copy.id}
+              ref={copy.id === 'original' ? originalCopyRef : null}
+              data-copy-id={copy.id}
               className={`challan-a5-page challan-copy-container bg-white text-black w-full max-w-[138mm] p-3 shadow-xl border border-slate-300 print:border-none print:shadow-none print:p-0 print:max-w-[138mm] text-[10px] leading-tight font-sans ${
                 isVisibleOnScreen ? 'block' : 'hidden print:block'
               }`}

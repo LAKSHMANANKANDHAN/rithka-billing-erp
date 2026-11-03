@@ -314,6 +314,213 @@ router.post('/', authenticate, async (req, res) => {
   }
 });
 
+// PUT /api/outward/:id - Update outward delivery challan
+router.put('/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      challan_date,
+      vehicle_no,
+      po_no,
+      po_date,
+      cust_dc_no,
+      cust_dc_date,
+      note,
+      remarks,
+      items
+    } = req.body;
+
+    const challan = await getOne('SELECT * FROM outward_challans WHERE id = ?', [id]);
+    if (!challan) {
+      return res.status(404).json({ success: false, message: 'Delivery Challan not found.' });
+    }
+
+    const inward = await getOne('SELECT * FROM inward_entries WHERE id = ?', [challan.inward_id]);
+    if (!inward) {
+      return res.status(404).json({ success: false, message: 'Linked Inward Entry does not exist.' });
+    }
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ success: false, message: 'Please select at least one item to dispatch.' });
+    }
+
+    const validatedItems = [];
+    let subtotal = 0;
+
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      const outwardQty = parseFloat(it.quantity);
+
+      if (isNaN(outwardQty) || outwardQty <= 0) {
+        continue;
+      }
+
+      // Check inward item exists & sum quantity dispatched from other challans
+      const inwardItem = await getOne(`
+        SELECT ii.*, 
+               COALESCE((
+                 SELECT SUM(oi.quantity) 
+                 FROM outward_items oi 
+                 WHERE oi.inward_item_id = ii.id AND oi.challan_id != ?
+               ), 0) as already_outward_other
+        FROM inward_items ii
+        WHERE ii.id = ? AND ii.inward_id = ?
+      `, [id, it.inward_item_id, challan.inward_id]);
+
+      if (!inwardItem) {
+        return res.status(400).json({
+          success: false,
+          message: `Inward item ID ${it.inward_item_id} not found in this inward consignment.`
+        });
+      }
+
+      const availableQty = inwardItem.quantity - parseFloat(inwardItem.already_outward_other || 0);
+
+      if (outwardQty > (availableQty + 0.0001)) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot dispatch ${outwardQty} of "${inwardItem.item_description}". Only ${availableQty} available from inward entry ${inward.inward_no}.`
+        });
+      }
+
+      const unitRate = parseFloat(it.unit_value != null && !isNaN(it.unit_value) ? it.unit_value : (inwardItem.unit_value || 0));
+      const lineTotal = outwardQty * unitRate;
+      subtotal += lineTotal;
+
+      validatedItems.push({
+        inward_item_id: inwardItem.id,
+        goods_id: inwardItem.goods_id,
+        item_description: inwardItem.item_description,
+        your_ref_no: it.your_ref_no || '',
+        quantity: outwardQty,
+        uom: it.uom || inwardItem.uom || 'Nos',
+        package_type: it.package_type || inwardItem.package_type || 'Loose',
+        unit_value: unitRate,
+        total_value: lineTotal
+      });
+    }
+
+    if (validatedItems.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid items with positive dispatch quantities were specified.'
+      });
+    }
+
+    const settings = await getOne('SELECT default_tax_rate FROM company_settings LIMIT 1');
+    const taxRate = parseFloat(challan.tax_rate ?? settings?.default_tax_rate ?? 9.0);
+    const taxAmount = (subtotal * taxRate) / 100.0;
+    const grandTotal = subtotal + taxAmount;
+
+    const dateStr = challan_date || challan.challan_date;
+
+    await run(`
+      UPDATE outward_challans SET
+        challan_date = ?,
+        po_no = ?,
+        po_date = ?,
+        cust_dc_no = ?,
+        cust_dc_date = ?,
+        vehicle_no = ?,
+        subtotal = ?,
+        tax_rate = ?,
+        tax_amount = ?,
+        grand_total = ?,
+        note = ?,
+        remarks = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `, [
+      dateStr,
+      po_no !== undefined ? po_no : challan.po_no,
+      po_date !== undefined ? po_date : challan.po_date,
+      cust_dc_no !== undefined ? cust_dc_no : challan.cust_dc_no,
+      cust_dc_date !== undefined ? cust_dc_date : challan.cust_dc_date,
+      vehicle_no !== undefined ? vehicle_no : challan.vehicle_no,
+      subtotal,
+      taxRate,
+      taxAmount,
+      grandTotal,
+      note !== undefined ? note : challan.note,
+      remarks !== undefined ? remarks : challan.remarks,
+      id
+    ]);
+
+    // Replace outward items
+    await run('DELETE FROM outward_items WHERE challan_id = ?', [id]);
+    for (const vit of validatedItems) {
+      await run(`
+        INSERT INTO outward_items (
+          challan_id, inward_item_id, goods_id, item_description, your_ref_no, 
+          quantity, uom, package_type, unit_value, total_value
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id,
+        vit.inward_item_id,
+        vit.goods_id,
+        vit.item_description,
+        vit.your_ref_no,
+        vit.quantity,
+        vit.uom,
+        vit.package_type,
+        vit.unit_value,
+        vit.total_value
+      ]);
+    }
+
+    // Replace stock transactions
+    await run("DELETE FROM stock_transactions WHERE reference_type = 'OUTWARD' AND reference_id = ?", [id]);
+    for (const vit of validatedItems) {
+      await run(`
+        INSERT INTO stock_transactions (
+          transaction_type, reference_type, reference_id, inward_no, challan_no, 
+          customer_id, goods_id, item_description, quantity, uom, unit_value, total_value, 
+          user_id, notes, transaction_date
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        'OUTWARD',
+        'OUTWARD',
+        id,
+        inward.inward_no,
+        challan.challan_no,
+        inward.customer_id,
+        vit.goods_id,
+        vit.item_description,
+        vit.quantity,
+        vit.uom,
+        vit.unit_value,
+        vit.total_value,
+        req.user.id,
+        (note !== undefined ? note : challan.note) || 'Updated outward delivery dispatch',
+        dateStr
+      ]);
+    }
+
+    const cust = await getOne('SELECT company_name FROM customers WHERE id = ?', [inward.customer_id]);
+    await logAudit(
+      req.user.id,
+      req.user.username,
+      'UPDATE_OUTWARD',
+      'outward_challans',
+      id,
+      `Updated Outward Delivery Challan ${challan.challan_no} for ${cust?.company_name || 'Customer'} (Grand Total: ₹${grandTotal.toFixed(2)})`
+    );
+
+    res.json({
+      success: true,
+      message: 'Delivery Challan updated successfully.',
+      challanId: id,
+      challanNo: challan.challan_no,
+      subtotal,
+      taxAmount,
+      grandTotal
+    });
+  } catch (err) {
+    console.error('Outward challan update error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 // DELETE /api/outward/:id (Owner only)
 router.delete('/:id', authenticate, requireOwner, async (req, res) => {
   try {

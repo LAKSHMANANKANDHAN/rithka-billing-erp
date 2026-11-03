@@ -25,11 +25,11 @@
   background: #94a3b8;
 }
 
-/* Print-specific styles for A4 Outward Delivery Challan */
+/* Print-specific styles for A5 Outward Delivery Challan (1-page fit per copy, 3 copies) */
 @media print {
   @page {
-    size: A4 portrait;
-    margin: 6mm 6mm 6mm 6mm;
+    size: A5 portrait;
+    margin: 4mm 5mm 4mm 5mm;
   }
 
   body {
@@ -46,23 +46,48 @@
   aside,
   header,
   button,
-  .print-hide {
+  .print-hide,
+  .print\:hidden {
     display: none !important;
   }
 
-  .print-only {
+  .print-only,
+  .print\:block {
     display: block !important;
   }
 
-  .challan-print-sheet {
+  /* Reset layout paddings so nothing pushes content out of page bounds */
+  div[class*="lg:pl-64"] {
+    padding-left: 0 !important;
+  }
+
+  main {
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  .challan-a5-page {
     box-shadow: none !important;
     border: none !important;
     width: 100% !important;
-    max-width: 100% !important;
-    margin: 0 !important;
+    max-width: 138mm !important;
+    margin: 0 auto !important;
     padding: 0 !important;
-    page-break-after: avoid;
-    page-break-inside: avoid;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    box-sizing: border-box !important;
+  }
+
+  .challan-a5-page:not(:last-child) {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  .challan-a5-page:last-child {
+    page-break-after: avoid !important;
+    break-after: avoid !important;
   }
 
   /* Force exact colors in print */

@@ -64,18 +64,49 @@ export default function ChallanPrintPreview({ challan, items, company, onBack, o
         targetElement.style.display = 'block';
       }
 
-      // Wait for any images (logos) to be fully loaded
-      const images = targetElement.querySelectorAll('img');
-      await Promise.all(
-        Array.from(images).map((img) => {
-          if (img.complete && img.naturalWidth > 0) return Promise.resolve();
-          return new Promise((resolve) => {
-            img.onload = () => resolve();
-            img.onerror = () => resolve();
-            setTimeout(resolve, 300);
-          });
-        })
-      );
+      // Preload image elements in memory so we can guarantee canvas rendering
+      const loadImg = (src) =>
+        new Promise((resolve) => {
+          if (!src) return resolve(null);
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => resolve(img);
+          img.onerror = () => resolve(null);
+          img.src = src;
+        });
+
+      const [sbImg, tuvImg] = await Promise.all([loadImg(logoSb), loadImg(logoTuv)]);
+
+      // Measure logo bounding positions relative to targetElement
+      const targetRect = targetElement.getBoundingClientRect();
+      const sbEl =
+        targetElement.querySelector('[data-logo-box="sb"]') ||
+        targetElement.querySelector('img[alt="SB Logo"]');
+      const tuvEl =
+        targetElement.querySelector('[data-logo-box="tuv"]') ||
+        targetElement.querySelector('img[alt="TÜV SÜD ISO 9001"]');
+
+      let sbPos = null;
+      if (sbEl && targetRect.width > 0 && targetRect.height > 0) {
+        const r = sbEl.getBoundingClientRect();
+        sbPos = {
+          xRatio: (r.left - targetRect.left) / targetRect.width,
+          yRatio: (r.top - targetRect.top) / targetRect.height,
+          wRatio: r.width / targetRect.width,
+          hRatio: r.height / targetRect.height,
+        };
+      }
+
+      let tuvPos = null;
+      if (tuvEl && targetRect.width > 0 && targetRect.height > 0) {
+        const r = tuvEl.getBoundingClientRect();
+        tuvPos = {
+          xRatio: (r.left - targetRect.left) / targetRect.width,
+          yRatio: (r.top - targetRect.top) / targetRect.height,
+          wRatio: r.width / targetRect.width,
+          hRatio: r.height / targetRect.height,
+        };
+      }
 
       // Render canvas with html2canvas-pro (native support for Tailwind CSS v4)
       const canvas = await html2canvas(targetElement, {
@@ -84,12 +115,41 @@ export default function ChallanPrintPreview({ challan, items, company, onBack, o
         allowTaint: true,
         backgroundColor: '#ffffff',
         logging: false,
+        onclone: (clonedDoc) => {
+          // In the cloned DOM, make sure logos are visible with explicit pixel dimensions
+          const clonedLogos = clonedDoc.querySelectorAll('img[data-logo-img]');
+          clonedLogos.forEach((img) => {
+            img.style.display = 'block';
+            img.style.visibility = 'visible';
+            img.style.width = '44px';
+            img.style.height = '44px';
+          });
+        },
       });
 
       // Restore hidden class if it was modified
       if (wasHidden) {
         targetElement.classList.add('hidden');
         targetElement.style.display = '';
+      }
+
+      // Explicitly paint logos directly onto the canvas to guarantee they are never missing
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        if (sbImg) {
+          const x = sbPos && sbPos.wRatio > 0 ? sbPos.xRatio * canvas.width : canvas.width * 0.024;
+          const y = sbPos && sbPos.hRatio > 0 ? sbPos.yRatio * canvas.height : canvas.height * 0.038;
+          const w = sbPos && sbPos.wRatio > 0 ? sbPos.wRatio * canvas.width : canvas.width * 0.082;
+          const h = sbPos && sbPos.hRatio > 0 ? sbPos.hRatio * canvas.height : canvas.width * 0.082;
+          ctx.drawImage(sbImg, x, y, w, h);
+        }
+        if (tuvImg) {
+          const x = tuvPos && tuvPos.wRatio > 0 ? tuvPos.xRatio * canvas.width : canvas.width * 0.894;
+          const y = tuvPos && tuvPos.hRatio > 0 ? tuvPos.yRatio * canvas.height : canvas.height * 0.038;
+          const w = tuvPos && tuvPos.wRatio > 0 ? tuvPos.wRatio * canvas.width : canvas.width * 0.082;
+          const h = tuvPos && tuvPos.hRatio > 0 ? tuvPos.hRatio * canvas.height : canvas.width * 0.082;
+          ctx.drawImage(tuvImg, x, y, w, h);
+        }
       }
 
       // Compress canvas to high-efficiency JPEG (0.78 quality) for very low storage (~90 KB - 140 KB)
@@ -112,6 +172,20 @@ export default function ChallanPrintPreview({ challan, items, company, onBack, o
       const marginY = Math.max(4, Math.min(8, (pdfHeight - contentHeight) / 2));
 
       pdf.addImage(imgData, 'JPEG', marginX, marginY, contentWidth, contentHeight, undefined, 'FAST');
+
+      // Also overlay logos directly into jsPDF as a rock-solid guarantee
+      try {
+        const logoY = marginY + (sbPos && sbPos.hRatio > 0 ? sbPos.yRatio * contentHeight : 7.2);
+        const logoH = sbPos && sbPos.hRatio > 0 ? sbPos.hRatio * contentHeight : 11.2;
+        const logoW = sbPos && sbPos.wRatio > 0 ? sbPos.wRatio * contentWidth : 11.2;
+        const leftX = marginX + (sbPos && sbPos.wRatio > 0 ? sbPos.xRatio * contentWidth : 2.5);
+        const rightX = marginX + (tuvPos && tuvPos.wRatio > 0 ? tuvPos.xRatio * contentWidth : contentWidth - 13.7);
+
+        pdf.addImage(logoSb, 'PNG', leftX, logoY, logoW, logoH, undefined, 'FAST');
+        pdf.addImage(logoTuv, 'PNG', rightX, logoY, logoW, logoH, undefined, 'FAST');
+      } catch (overlayErr) {
+        console.warn('PDF logo overlay fallback warning:', overlayErr);
+      }
 
       // Filename formatted as: date , challan number , company name
       const cleanFileNamePart = (str) =>
@@ -269,20 +343,36 @@ export default function ChallanPrintPreview({ challan, items, company, onBack, o
                   </div>
 
                   {/* Left Brand Logo */}
-                  <div className="absolute left-2 top-6 flex items-center justify-center">
+                  <div
+                    data-logo-box="sb"
+                    className="absolute left-2 top-6 flex items-center justify-center"
+                    style={{ width: '44px', height: '44px', top: '24px', left: '8px' }}
+                  >
                     <img
                       src={logoSb}
                       alt="SB Logo"
-                      className="h-10 sm:h-11 w-auto object-contain drop-shadow-xs"
+                      data-logo-img="sb"
+                      width={44}
+                      height={44}
+                      style={{ width: '44px', height: '44px', objectFit: 'contain', display: 'block' }}
+                      className="object-contain"
                     />
                   </div>
 
                   {/* Right ISO Certification Badge */}
-                  <div className="absolute right-2 top-6 flex items-center justify-center">
+                  <div
+                    data-logo-box="tuv"
+                    className="absolute right-2 top-6 flex items-center justify-center"
+                    style={{ width: '44px', height: '44px', top: '24px', right: '8px' }}
+                  >
                     <img
                       src={logoTuv}
                       alt="TÜV SÜD ISO 9001"
-                      className="h-10 sm:h-11 w-auto object-contain drop-shadow-xs"
+                      data-logo-img="tuv"
+                      width={44}
+                      height={44}
+                      style={{ width: '44px', height: '44px', objectFit: 'contain', display: 'block' }}
+                      className="object-contain"
                     />
                   </div>
 

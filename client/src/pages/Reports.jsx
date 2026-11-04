@@ -11,16 +11,43 @@ import {
   CheckCircle2,
   FileText,
   Boxes,
-  ArrowDownLeft
+  ArrowDownLeft,
+  FileSpreadsheet
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import api from '../api/client';
 
+function formatDotDate(val) {
+  if (!val || val === '-' || val === 'null' || val === 'undefined') return '';
+  const str = String(val).trim();
+  const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (ymd) {
+    const [, y, m, d] = ymd;
+    return `${parseInt(d, 10)}.${parseInt(m, 10)}.${y}`;
+  }
+  const dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    return `${parseInt(d, 10)}.${parseInt(m, 10)}.${y}`;
+  }
+  return str;
+}
+
 export default function Reports() {
-  const [activeTab, setActiveTab] = useState('daily');
+  const [activeTab, setActiveTab] = useState('closing_stock');
   const [customers, setCustomers] = useState([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState('');
 
-  // Date filters
+  // Closing Stock & Despatch Statement Filters
+  const [selectedMonth, setSelectedMonth] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  });
+  const [selectedPartNo, setSelectedPartNo] = useState('');
+  const [openingStockInput, setOpeningStockInput] = useState('');
+  const [closingStockReport, setClosingStockReport] = useState(null);
+
+  // Date filters for other legacy reports
   const [singleDate, setSingleDate] = useState(new Date().toISOString().split('T')[0]);
   const [startDate, setStartDate] = useState(
     new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]
@@ -41,14 +68,29 @@ export default function Reports() {
 
   useEffect(() => {
     fetchReport();
-  }, [activeTab, singleDate, startDate, endDate, selectedCustomerId]);
+  }, [
+    activeTab,
+    selectedCustomerId,
+    selectedMonth,
+    selectedPartNo,
+    openingStockInput,
+    singleDate,
+    startDate,
+    endDate
+  ]);
 
   const loadCustomers = async () => {
     try {
       const res = await api.get('/customers');
-      setCustomers(res.data.customers || []);
-      if (res.data.customers?.length > 0 && !selectedCustomerId) {
-        setSelectedCustomerId(res.data.customers[0].id);
+      const custList = res.data.customers || [];
+      setCustomers(custList);
+      if (custList.length > 0 && !selectedCustomerId) {
+        // Prefer LGB customer if available to match typical report
+        const lgb = custList.find((c) =>
+          c.company_name?.toLowerCase().includes('lgb') ||
+          c.company_name?.toLowerCase().includes('l.g.b')
+        );
+        setSelectedCustomerId(lgb ? lgb.id : custList[0].id);
       }
     } catch (err) {
       console.error(err);
@@ -58,7 +100,20 @@ export default function Reports() {
   const fetchReport = async () => {
     setLoading(true);
     try {
-      if (activeTab === 'daily') {
+      if (activeTab === 'closing_stock') {
+        const res = await api.get('/reports/closing-stock', {
+          params: {
+            customer_id: selectedCustomerId || undefined,
+            month: selectedMonth,
+            part_no: selectedPartNo || undefined,
+            opening_stock_override: openingStockInput !== '' ? openingStockInput : undefined,
+          },
+        });
+        setClosingStockReport(res.data);
+        if (res.data.partsList?.length > 0 && !selectedPartNo) {
+          setSelectedPartNo(res.data.selectedPart || res.data.partsList[0]);
+        }
+      } else if (activeTab === 'daily') {
         const res = await api.get('/reports/daily', { params: { date: singleDate } });
         setDailyData(res.data);
       } else if (activeTab === 'range') {
@@ -93,7 +148,114 @@ export default function Reports() {
     window.print();
   };
 
+  // Export Closing Stock Statement to genuine Excel (.xlsx) matching the photo layout
+  const exportClosingStockExcel = () => {
+    if (!closingStockReport) return;
+
+    const {
+      monthLabel,
+      customer,
+      selectedPart,
+      summary,
+      tableRows = []
+    } = closingStockReport;
+
+    const customerName = customer?.company_name || 'Customer';
+    const isLgb = customerName.toLowerCase().includes('lgb') || customerName.toLowerCase().includes('l.g.b');
+    const dcColHeader = isLgb ? 'LGB DC/J.O NO' : 'CUSTOMER DC/J.O NO';
+
+    const wb = XLSX.utils.book_new();
+
+    // Data array matching the paper layout
+    const sheetData = [
+      ['CLOSING STOCK AS ON', monthLabel || ''],
+      ['PART NO', selectedPart || 'ALL PARTS', '', '', 'CUSTOMER:', customerName],
+      [], // blank separator
+      [
+        dcColHeader,
+        'RECEIVED DATE',
+        'RECEIVED QTY',
+        'OUR DESPATCHED DC NO',
+        'DESPATCHED DATE',
+        'DESPATCHED QTY',
+        'PENDING QTY',
+        'REMARKS'
+      ]
+    ];
+
+    // Data rows
+    tableRows.forEach((row) => {
+      sheetData.push([
+        row.cust_dc_no || '',
+        row.received_date ? formatDotDate(row.received_date) : '',
+        row.received_qty !== '' && row.received_qty !== undefined ? Number(row.received_qty) : '',
+        row.despatch_dc_no || '',
+        row.despatch_date ? formatDotDate(row.despatch_date) : '',
+        row.despatch_qty !== '' && row.despatch_qty !== undefined ? Number(row.despatch_qty) : '',
+        row.pending_qty !== '' && row.pending_qty !== undefined ? Number(row.pending_qty) : '',
+        row.remarks || ''
+      ]);
+    });
+
+    // Blank row before totals
+    sheetData.push([]);
+
+    // Totals row
+    sheetData.push([
+      '',
+      '',
+      summary?.totalReceivedMonth || 0,
+      '',
+      '',
+      summary?.totalDespatchedMonth || 0,
+      '',
+      ''
+    ]);
+
+    // Blank row before summary box
+    sheetData.push([]);
+
+    // Bottom Summary Box
+    sheetData.push(['OPENING STOCK', summary?.openingStock || 0]);
+    sheetData.push([
+      'RECEIPT FOR THIS MONTH',
+      summary?.totalReceivedMonth || 0,
+      '',
+      '',
+      'Total stock available',
+      summary?.totalStockAvailable || 0
+    ]);
+    sheetData.push(['TOTAL STOCKS', summary?.totalStocks || 0]);
+
+    const ws = XLSX.utils.aoa_to_sheet(sheetData);
+
+    // Set readable column widths
+    ws['!cols'] = [
+      { wch: 22 }, // DC/J.O NO
+      { wch: 16 }, // RECEIVED DATE
+      { wch: 16 }, // RECEIVED QTY
+      { wch: 24 }, // OUR DESPATCHED DC NO
+      { wch: 18 }, // DESPATCHED DATE
+      { wch: 16 }, // DESPATCHED QTY
+      { wch: 16 }, // PENDING QTY
+      { wch: 22 }  // REMARKS
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Closing Stock');
+
+    const cleanPart = (selectedPart || 'All_Parts').replace(/[/\\?%*:|"<>]/g, '_').trim();
+    const cleanCustomer = customerName.replace(/[/\\?%*:|"<>]/g, '_').trim();
+    const fileName = `Closing_Stock_${monthLabel}_${cleanCustomer}_${cleanPart}.xlsx`;
+
+    XLSX.writeFile(wb, fileName);
+  };
+
   const exportCurrentCSV = () => {
+    if (activeTab === 'closing_stock') {
+      exportClosingStockExcel();
+      return;
+    }
+
     let csvContent = 'data:text/csv;charset=utf-8,';
 
     if (activeTab === 'daily' && dailyData) {
@@ -151,24 +313,25 @@ export default function Reports() {
             Analytics & Reports
           </h1>
           <p className="text-sm text-slate-500">
-            Exportable business audits: Daily, Weekly, Monthly, Customer-wise, and Pending Task reports.
+            Exportable business audits: Closing Stock & Despatch Statement, Daily, Weekly, Customer-wise, and Pending Task reports.
           </p>
         </div>
 
         <div className="flex items-center space-x-2">
           <button
             onClick={printCurrentReport}
-            className="inline-flex items-center space-x-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition"
+            className="inline-flex items-center space-x-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition cursor-pointer"
           >
             <Printer className="w-4 h-4" />
             <span>Print Report</span>
           </button>
           <button
-            onClick={exportCurrentCSV}
-            className="inline-flex items-center space-x-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition"
+            onClick={activeTab === 'closing_stock' ? exportClosingStockExcel : exportCurrentCSV}
+            className="inline-flex items-center space-x-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
+            title="Download formatted Excel (.xlsx) report"
           >
-            <Download className="w-4 h-4" />
-            <span>Download CSV / Excel</span>
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Download Excel (.xlsx)</span>
           </button>
         </div>
       </div>
@@ -176,18 +339,19 @@ export default function Reports() {
       {/* Tabs Bar */}
       <div className="flex border-b border-slate-200 overflow-x-auto space-x-2 bg-white px-4 pt-3 rounded-xl shadow-xs print:hidden">
         {[
-          { id: 'daily', label: 'A. Daily Report' },
-          { id: 'range', label: 'B. Weekly / Date Range' },
-          { id: 'customer', label: 'C. Customer-wise Report' },
-          { id: 'pending', label: 'D. Pending Task Report' },
-          { id: 'complete', label: 'E. Complete Work Overview' },
+          { id: 'closing_stock', label: '1. Closing Stock & Despatch Statement' },
+          { id: 'daily', label: '2. Daily Report' },
+          { id: 'range', label: '3. Weekly / Date Range' },
+          { id: 'customer', label: '4. Customer-wise Report' },
+          { id: 'pending', label: '5. Pending Task Report' },
+          { id: 'complete', label: '6. Complete Work Overview' },
         ].map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`py-3 px-3 text-xs sm:text-sm font-bold border-b-2 whitespace-nowrap transition-colors ${
+            className={`py-3 px-3 text-xs sm:text-sm font-bold border-b-2 whitespace-nowrap transition-colors cursor-pointer ${
               activeTab === tab.id
-                ? 'border-blue-600 text-blue-900'
+                ? 'border-blue-600 text-blue-900 bg-blue-50/50 rounded-t-lg'
                 : 'border-transparent text-slate-500 hover:text-slate-800'
             }`}
           >
@@ -198,6 +362,74 @@ export default function Reports() {
 
       {/* Filter Ribbon */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center gap-4 text-xs print:hidden">
+        {activeTab === 'closing_stock' && (
+          <>
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Select Month:</label>
+              <input
+                type="month"
+                value={selectedMonth}
+                onChange={(e) => setSelectedMonth(e.target.value)}
+                className="p-2 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800"
+              />
+            </div>
+
+            <div className="flex-1 min-w-[200px] max-w-xs">
+              <label className="block font-bold text-slate-700 mb-1">Customer *:</label>
+              <select
+                value={selectedCustomerId}
+                onChange={(e) => setSelectedCustomerId(e.target.value)}
+                className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800"
+              >
+                {customers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.company_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex-1 min-w-[180px] max-w-xs">
+              <label className="block font-bold text-slate-700 mb-1">Part No / Item:</label>
+              <select
+                value={selectedPartNo}
+                onChange={(e) => setSelectedPartNo(e.target.value)}
+                className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800"
+              >
+                <option value="ALL">All Parts (Consolidated)</option>
+                {closingStockReport?.partsList?.map((p, idx) => (
+                  <option key={idx} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="w-32">
+              <label className="block font-bold text-slate-700 mb-1" title="Leave blank for auto-calculated prior balance">
+                Opening Stock:
+              </label>
+              <input
+                type="number"
+                placeholder="Auto"
+                value={openingStockInput}
+                onChange={(e) => setOpeningStockInput(e.target.value)}
+                className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-800 placeholder-slate-400"
+              />
+            </div>
+
+            <div className="self-end pb-0.5">
+              <button
+                onClick={exportClosingStockExcel}
+                className="inline-flex items-center space-x-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition shadow-xs cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Export Excel (.xlsx)</span>
+              </button>
+            </div>
+          </>
+        )}
+
         {activeTab === 'daily' && (
           <div>
             <label className="block font-bold text-slate-700 mb-1">Select Report Date:</label>
@@ -253,6 +485,217 @@ export default function Reports() {
           </div>
         )}
       </div>
+
+      {/* ================= REPORT TAB 0: CLOSING STOCK & DESPATCH STATEMENT ================= */}
+      {activeTab === 'closing_stock' && (
+        <div className="space-y-6">
+          {/* Top Quick Action Bar */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-4 print:hidden">
+            <div className="flex items-center space-x-3">
+              <span className="inline-flex items-center px-3 py-1 bg-amber-100 text-amber-900 rounded-lg text-xs font-black">
+                CLOSING STOCK STATEMENT
+              </span>
+              <span className="text-xs text-slate-500 font-medium">
+                {closingStockReport?.monthLabel || selectedMonth} •{' '}
+                {closingStockReport?.customer?.company_name || 'All Customers'}
+              </span>
+            </div>
+
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={printCurrentReport}
+                className="inline-flex items-center space-x-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Print Statement</span>
+              </button>
+              <button
+                onClick={exportClosingStockExcel}
+                className="inline-flex items-center space-x-1.5 px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-md cursor-pointer"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>Download Excel (.xlsx)</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Statement Paper Preview (Matching the User's Image Form) */}
+          <div className="bg-white p-6 sm:p-10 rounded-2xl border border-slate-300 shadow-xl max-w-5xl mx-auto text-black font-sans print:p-0 print:border-none print:shadow-none print:max-w-none">
+            {/* Header: CLOSING STOCK AS ON & PART NO */}
+            <div className="mb-4">
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <div className="flex items-center space-x-3">
+                  <span className="text-xs sm:text-sm font-black tracking-wide uppercase text-black">
+                    CLOSING STOCK AS ON
+                  </span>
+                  <div className="border-2 border-black px-3 py-0.5 rounded-md font-black text-xs sm:text-sm bg-white text-black min-w-[70px] text-center">
+                    {closingStockReport?.monthLabel || selectedMonth}
+                  </div>
+                </div>
+
+                <div className="text-xs font-bold text-slate-700 print:text-black">
+                  <span>Customer: </span>
+                  <span className="font-black text-black">
+                    {closingStockReport?.customer?.company_name || 'General Stock'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex items-center space-x-3">
+                <span className="text-xs sm:text-sm font-black uppercase text-black">
+                  PART NO
+                </span>
+                <span className="text-xs sm:text-sm font-black text-black tracking-wide">
+                  {closingStockReport?.selectedPart || selectedPartNo || 'ALL PARTS'}
+                </span>
+              </div>
+            </div>
+
+            {/* Main Ledger Table with Strict Dark Borders */}
+            <div className="overflow-x-auto border-2 border-black">
+              <table className="w-full text-[11px] leading-tight border-collapse bg-white">
+                <thead>
+                  <tr className="border-b-2 border-black bg-slate-100 text-black font-black uppercase text-center text-[10px] sm:text-[11px]">
+                    <th className="border-r border-black p-2 font-black w-[16%]">
+                      {closingStockReport?.customer?.company_name?.toLowerCase().includes('lgb') ||
+                      closingStockReport?.customer?.company_name?.toLowerCase().includes('l.g.b')
+                        ? 'LGB DC/J.O NO'
+                        : 'CUSTOMER DC/J.O NO'}
+                    </th>
+                    <th className="border-r border-black p-2 font-black w-[12%]">
+                      RECEIVED DATE
+                    </th>
+                    <th className="border-r border-black p-2 font-black w-[10%]">
+                      RECEIVED QTY
+                    </th>
+                    <th className="border-r border-black p-2 font-black w-[17%]">
+                      OUR DESPATCHED DC NO
+                    </th>
+                    <th className="border-r border-black p-2 font-black w-[12%]">
+                      DESPATCHED DATE
+                    </th>
+                    <th className="border-r border-black p-2 font-black w-[10%]">
+                      DESPATCHED QTY
+                    </th>
+                    <th className="border-r border-black p-2 font-black w-[10%]">
+                      PENDING QTY
+                    </th>
+                    <th className="p-2 font-black w-[13%]">
+                      REMARKS
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-black/70">
+                  {/* Data Rows */}
+                  {(closingStockReport?.tableRows || []).map((row, idx) => (
+                    <tr
+                      key={idx}
+                      className={`text-black font-semibold hover:bg-slate-50/50 ${
+                        row.isOpening ? 'bg-amber-50/30' : ''
+                      }`}
+                    >
+                      <td className="border-r border-black px-2 py-1.5 font-bold whitespace-nowrap">
+                        {row.cust_dc_no}
+                      </td>
+                      <td className="border-r border-black px-2 py-1.5 text-center whitespace-nowrap">
+                        {row.received_date ? formatDotDate(row.received_date) : ''}
+                      </td>
+                      <td className="border-r border-black px-2 py-1.5 text-center font-bold font-mono">
+                        {row.received_qty !== '' && row.received_qty !== undefined ? row.received_qty : ''}
+                      </td>
+                      <td className="border-r border-black px-2 py-1.5 font-bold font-mono whitespace-nowrap">
+                        {row.despatch_dc_no}
+                      </td>
+                      <td className="border-r border-black px-2 py-1.5 text-center whitespace-nowrap">
+                        {row.despatch_date ? formatDotDate(row.despatch_date) : ''}
+                      </td>
+                      <td className="border-r border-black px-2 py-1.5 text-center font-bold font-mono">
+                        {row.despatch_qty !== '' && row.despatch_qty !== undefined ? row.despatch_qty : ''}
+                      </td>
+                      <td className="border-r border-black px-2 py-1.5 text-center font-bold font-mono">
+                        {row.pending_qty !== '' && row.pending_qty !== undefined ? row.pending_qty : ''}
+                      </td>
+                      <td className="px-2 py-1.5 text-left text-[10px]">
+                        {row.remarks || ''}
+                      </td>
+                    </tr>
+                  ))}
+
+                  {/* Empty Spacer Rows to Fill the Page (Like the Physical Template) */}
+                  {Array.from({
+                    length: Math.max(0, 10 - (closingStockReport?.tableRows?.length || 0))
+                  }).map((_, emptyIdx) => (
+                    <tr key={`empty-${emptyIdx}`} className="h-6">
+                      <td className="border-r border-black px-2 py-1.5">&nbsp;</td>
+                      <td className="border-r border-black px-2 py-1.5">&nbsp;</td>
+                      <td className="border-r border-black px-2 py-1.5">&nbsp;</td>
+                      <td className="border-r border-black px-2 py-1.5">&nbsp;</td>
+                      <td className="border-r border-black px-2 py-1.5">&nbsp;</td>
+                      <td className="border-r border-black px-2 py-1.5">&nbsp;</td>
+                      <td className="border-r border-black px-2 py-1.5">&nbsp;</td>
+                      <td className="px-2 py-1.5">&nbsp;</td>
+                    </tr>
+                  ))}
+
+                  {/* Totals Row */}
+                  <tr className="border-t-2 border-black font-black text-black bg-slate-50">
+                    <td className="border-r border-black px-2 py-1.5 text-right font-black" colSpan={2}>
+                      &nbsp;
+                    </td>
+                    <td className="border-r border-black px-2 py-1.5 text-center font-black font-mono text-xs">
+                      {closingStockReport?.summary?.totalReceivedMonth || 0}
+                    </td>
+                    <td className="border-r border-black px-2 py-1.5 text-right font-black" colSpan={2}>
+                      &nbsp;
+                    </td>
+                    <td className="border-r border-black px-2 py-1.5 text-center font-black font-mono text-xs">
+                      {closingStockReport?.summary?.totalDespatchedMonth || 0}
+                    </td>
+                    <td className="border-r border-black px-2 py-1.5" colSpan={2}>
+                      &nbsp;
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            {/* Bottom Reconciliation Summary Box (Exact Form as in Photo) */}
+            <div className="mt-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-6 pt-2">
+              {/* Left Box: 3-Row Bordered Grid */}
+              <div className="border-2 border-black w-full max-w-xs text-xs font-black">
+                <div className="flex justify-between items-center border-b border-black px-3 py-1 bg-white">
+                  <span className="uppercase text-black">OPENING STOCK</span>
+                  <span className="font-mono text-black font-black">
+                    {closingStockReport?.summary?.openingStock || 0}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center border-b border-black px-3 py-1 bg-white">
+                  <span className="uppercase text-black">RECEIPT FOR THIS MONTH</span>
+                  <span className="font-mono text-black font-black">
+                    {closingStockReport?.summary?.totalReceivedMonth || 0}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center px-3 py-1 bg-slate-100">
+                  <span className="uppercase text-black">TOTAL STOCKS</span>
+                  <span className="font-mono text-black font-black">
+                    {closingStockReport?.summary?.totalStocks || 0}
+                  </span>
+                </div>
+              </div>
+
+              {/* Right Side: Total Stock Available */}
+              <div className="flex items-center space-x-6 pr-6">
+                <span className="text-sm sm:text-base font-black text-black uppercase tracking-wide">
+                  Total stock available
+                </span>
+                <span className="text-2xl sm:text-3xl font-black font-mono text-black">
+                  {closingStockReport?.summary?.totalStockAvailable || 0}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ================= REPORT TAB 1: DAILY ================= */}
       {activeTab === 'daily' && dailyData && (

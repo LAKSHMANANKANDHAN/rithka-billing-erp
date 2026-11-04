@@ -471,4 +471,264 @@ router.get('/complete-work', authenticate, async (req, res) => {
   }
 });
 
+// GET /api/reports/closing-stock - Monthly Closing Stock & Despatch Statement (Job Work Reconciliation)
+router.get('/closing-stock', authenticate, async (req, res) => {
+  try {
+    const { customer_id, month, part_no, startDate: qStart, endDate: qEnd, opening_stock_override } = req.query;
+
+    // Determine start and end date of the month
+    let start, end, monthLabel;
+    if (qStart && qEnd) {
+      start = qStart;
+      end = qEnd;
+      monthLabel = `${qStart} to ${qEnd}`;
+    } else {
+      const now = new Date();
+      const mStr = month || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+      const [y, m] = mStr.split('-').map(Number);
+      const firstDay = new Date(Date.UTC(y, m - 1, 1));
+      const lastDay = new Date(Date.UTC(y, m, 0));
+      start = firstDay.toISOString().split('T')[0];
+      end = lastDay.toISOString().split('T')[0];
+
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const shortYear = String(y).slice(-2);
+      monthLabel = `${monthNames[(m || 1) - 1]}-${shortYear}`;
+    }
+
+    // Customer
+    let customer = null;
+    if (customer_id) {
+      customer = await getOne('SELECT * FROM customers WHERE id = ?', [customer_id]);
+    } else {
+      customer = await getOne("SELECT * FROM customers WHERE company_name ILIKE '%L.G.B%' OR company_name ILIKE '%LGB%' LIMIT 1") 
+        || await getOne('SELECT * FROM customers ORDER BY id ASC LIMIT 1');
+    }
+
+    const custId = customer?.id;
+
+    // List of distinct parts / item descriptions for this customer
+    let partsList = [];
+    if (custId) {
+      const pRows = await query(`
+        SELECT DISTINCT ii.item_description 
+        FROM inward_items ii
+        JOIN inward_entries ie ON ii.inward_id = ie.id
+        WHERE ie.customer_id = ?
+        ORDER BY ii.item_description ASC
+      `, [custId]);
+      partsList = pRows.map(r => r.item_description).filter(Boolean);
+    }
+
+    // Selected part: if none provided, use the first available part, or null
+    const selectedPart = (part_no !== undefined && part_no !== '') ? part_no : (partsList.length > 0 ? partsList[0] : '');
+
+    // 1. Calculate Opening Stock prior to startDate
+    let calculatedOpeningStock = 0;
+    if (custId) {
+      const priorParams = [custId, start];
+      let partClause = '';
+      if (selectedPart && selectedPart !== 'ALL') {
+        partClause = ' AND ii.item_description = ?';
+        priorParams.push(selectedPart);
+      }
+
+      const priorInRow = await getOne(`
+        SELECT COALESCE(SUM(ii.quantity), 0) as total_in
+        FROM inward_items ii
+        JOIN inward_entries ie ON ii.inward_id = ie.id
+        WHERE ie.customer_id = ? 
+          AND DATE(CASE WHEN ie.dc_date IS NOT NULL AND ie.dc_date != '' THEN ie.dc_date ELSE CAST(ie.created_at AS TEXT) END) < DATE(?)
+          ${partClause}
+      `, priorParams);
+
+      const priorOutRow = await getOne(`
+        SELECT COALESCE(SUM(oi.quantity), 0) as total_out
+        FROM outward_items oi
+        JOIN outward_challans oc ON oi.challan_id = oc.id
+        JOIN inward_items ii ON oi.inward_item_id = ii.id
+        WHERE oc.customer_id = ? 
+          AND DATE(oc.challan_date) < DATE(?)
+          ${partClause}
+      `, priorParams);
+
+      calculatedOpeningStock = Math.max(0, Number(priorInRow?.total_in || 0) - Number(priorOutRow?.total_out || 0));
+    }
+
+    const openingStock = (opening_stock_override !== undefined && opening_stock_override !== '' && !isNaN(Number(opening_stock_override)))
+      ? Number(opening_stock_override)
+      : calculatedOpeningStock;
+
+    // Check if any prior batch (opening stock) was despatched during THIS month
+    let openingStockDespatches = [];
+    if (custId) {
+      const opDespatchParams = [custId, start, start, end];
+      let partClause = '';
+      if (selectedPart && selectedPart !== 'ALL') {
+        partClause = ' AND ii.item_description = ?';
+        opDespatchParams.push(selectedPart);
+      }
+
+      openingStockDespatches = await query(`
+        SELECT 
+          oi.quantity as despatch_qty,
+          oc.challan_no,
+          oc.challan_date,
+          oc.remarks as challan_remarks
+        FROM outward_items oi
+        JOIN outward_challans oc ON oi.challan_id = oc.id
+        JOIN inward_items ii ON oi.inward_item_id = ii.id
+        JOIN inward_entries ie ON ii.inward_id = ie.id
+        WHERE oc.customer_id = ? 
+          AND DATE(CASE WHEN ie.dc_date IS NOT NULL AND ie.dc_date != '' THEN ie.dc_date ELSE CAST(ie.created_at AS TEXT) END) < DATE(?)
+          AND DATE(oc.challan_date) BETWEEN DATE(?) AND DATE(?)
+          ${partClause}
+        ORDER BY oc.challan_date ASC, oi.id ASC
+      `, opDespatchParams);
+    }
+
+    // 2. Fetch Inward entries received during this period
+    let inwardRows = [];
+    if (custId) {
+      const inParams = [custId, start, end];
+      let partClause = '';
+      if (selectedPart && selectedPart !== 'ALL') {
+        partClause = ' AND ii.item_description = ?';
+        inParams.push(selectedPart);
+      }
+
+      inwardRows = await query(`
+        SELECT 
+          ii.id as inward_item_id,
+          ie.id as inward_id,
+          ie.inward_no,
+          ie.dc_no as cust_dc_no,
+          COALESCE(NULLIF(ie.dc_date, ''), CAST(DATE(ie.created_at) AS TEXT)) as received_date,
+          ii.item_description,
+          ii.quantity as received_qty,
+          ii.uom,
+          ii.remarks as item_remarks,
+          ie.remarks as entry_remarks
+        FROM inward_items ii
+        JOIN inward_entries ie ON ii.inward_id = ie.id
+        WHERE ie.customer_id = ? 
+          AND DATE(CASE WHEN ie.dc_date IS NOT NULL AND ie.dc_date != '' THEN ie.dc_date ELSE CAST(ie.created_at AS TEXT) END) BETWEEN DATE(?) AND DATE(?)
+          ${partClause}
+        ORDER BY DATE(CASE WHEN ie.dc_date IS NOT NULL AND ie.dc_date != '' THEN ie.dc_date ELSE CAST(ie.created_at AS TEXT) END) ASC, ii.id ASC
+      `, inParams);
+    }
+
+    // 3. For each inward item, fetch all outward despatches linked to it
+    const tableRows = [];
+    let totalReceivedMonth = 0;
+    let totalDespatchedMonth = 0;
+
+    // Handle Opening Stock row(s)
+    let openingRemaining = openingStock;
+    if (openingStockDespatches.length > 0) {
+      openingStockDespatches.forEach((od, idx) => {
+        openingRemaining = Math.max(0, openingRemaining - Number(od.despatch_qty || 0));
+        totalDespatchedMonth += Number(od.despatch_qty || 0);
+        tableRows.push({
+          isOpening: true,
+          cust_dc_no: idx === 0 ? 'Opening stock' : '',
+          received_date: '',
+          received_qty: idx === 0 ? openingStock : '',
+          despatch_dc_no: od.challan_no || '',
+          despatch_date: od.challan_date || '',
+          despatch_qty: Number(od.despatch_qty || 0),
+          pending_qty: openingRemaining,
+          remarks: od.challan_remarks || ''
+        });
+      });
+    } else {
+      tableRows.push({
+        isOpening: true,
+        cust_dc_no: 'Opening stock',
+        received_date: '',
+        received_qty: openingStock > 0 ? openingStock : '',
+        despatch_dc_no: '',
+        despatch_date: '',
+        despatch_qty: '',
+        pending_qty: openingStock > 0 ? openingStock : '',
+        remarks: ''
+      });
+    }
+
+    // Process each inward item in the month
+    for (const inItem of inwardRows) {
+      totalReceivedMonth += Number(inItem.received_qty || 0);
+
+      const despatches = await query(`
+        SELECT 
+          oi.quantity as despatch_qty,
+          oc.challan_no,
+          oc.challan_date,
+          oc.remarks as challan_remarks
+        FROM outward_items oi
+        JOIN outward_challans oc ON oi.challan_id = oc.id
+        WHERE oi.inward_item_id = ?
+        ORDER BY oc.challan_date ASC, oi.id ASC
+      `, [inItem.inward_item_id]);
+
+      let batchPending = Number(inItem.received_qty || 0);
+
+      if (despatches.length === 0) {
+        tableRows.push({
+          inward_item_id: inItem.inward_item_id,
+          cust_dc_no: inItem.cust_dc_no || inItem.inward_no,
+          received_date: inItem.received_date,
+          received_qty: inItem.received_qty,
+          despatch_dc_no: '',
+          despatch_date: '',
+          despatch_qty: '',
+          pending_qty: '',
+          remarks: inItem.item_remarks || inItem.entry_remarks || ''
+        });
+      } else {
+        despatches.forEach((d, idx) => {
+          batchPending = Math.max(0, batchPending - Number(d.despatch_qty || 0));
+          totalDespatchedMonth += Number(d.despatch_qty || 0);
+
+          tableRows.push({
+            inward_item_id: inItem.inward_item_id,
+            cust_dc_no: idx === 0 ? (inItem.cust_dc_no || inItem.inward_no) : '',
+            received_date: idx === 0 ? inItem.received_date : '',
+            received_qty: idx === 0 ? inItem.received_qty : '',
+            despatch_dc_no: d.challan_no || '',
+            despatch_date: d.challan_date || '',
+            despatch_qty: Number(d.despatch_qty || 0),
+            pending_qty: batchPending,
+            remarks: d.challan_remarks || (idx === 0 ? inItem.item_remarks : '') || ''
+          });
+        });
+      }
+    }
+
+    const totalStocks = openingStock + totalReceivedMonth;
+    const totalStockAvailable = Math.max(0, totalStocks - totalDespatchedMonth);
+
+    res.json({
+      success: true,
+      monthLabel,
+      startDate: start,
+      endDate: end,
+      customer,
+      partsList,
+      selectedPart,
+      summary: {
+        openingStock,
+        totalReceivedMonth,
+        totalStocks,
+        totalDespatchedMonth,
+        totalStockAvailable
+      },
+      tableRows
+    });
+  } catch (err) {
+    console.error('Closing stock report error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
 module.exports = router;

@@ -24,7 +24,8 @@
     "react-dom": "^19.2.8",
     "react-router-dom": "^7.18.4",
     "rithka-billing-software": "file:..",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/react": "^19.2.18",
